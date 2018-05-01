@@ -1,0 +1,13 @@
+[package]
+name = "ads"
+version = "0.0.1"
+authors = ["Georg Brandl <georg@python.org>"]
+license = "MIT/Apache-2.0"
+description = "Types for working with the Beckhoff Automation Device Specification protocol for PLCs"
+repository = "https://github.com/birkenfeld/ads-rs"
+documentation = "http://docs.rs/ads"
+keywords = ["Beckhoff", "ADS", "automation", "device", "PLC"]
+
+[dependencies]
+byteorder = "1.2.2"
+itertools = "0.7.8"
