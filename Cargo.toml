@@ -1,13 +1,18 @@
 [package]
 name = "ads"
-version = "0.0.1"
-authors = ["Georg Brandl <georg@python.org>"]
+version = "0.1.0"
+edition = "2021"
+authors = ["Georg Brandl <g.brandl@fz-juelich.de>"]
 license = "MIT/Apache-2.0"
-description = "Types for working with the Beckhoff Automation Device Specification protocol for PLCs"
+description = "Client for the Beckhoff Automation Device Specification protocol for PLCs"
 repository = "https://github.com/birkenfeld/ads-rs"
-documentation = "http://docs.rs/ads"
 keywords = ["Beckhoff", "ADS", "automation", "device", "PLC"]
 
 [dependencies]
-byteorder = "1.2.2"
-itertools = "0.7.8"
+byteorder = "1.4.3"
+crossbeam-channel = "0.5.1"
+itertools = "0.10.1"
+thiserror = "1.0.30"
+
+[dev-dependencies]
+argh = "0.1.6"
