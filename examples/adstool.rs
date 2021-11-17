@@ -8,10 +8,10 @@ use argh::FromArgs;
 /// A utility for managing ADS servers.
 struct Args {
     #[argh(positional)]
-    /// hostname[:port] to connect to
+    /// hostname:port to connect to
     target: String,
     #[argh(option)]
-    /// AMS address (required for most subcommands)
+    /// AMS address netid:port (required for most subcommands)
     ams: Option<ads::AmsAddr>,
     #[argh(subcommand)]
     cmd: Cmd,

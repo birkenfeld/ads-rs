@@ -221,7 +221,7 @@ impl Client {
                 return ads_error(result);
             }
 
-            Ok(data_len - 4)
+            Ok(())
         };
 
         if let Some(channels) = &self.channels {
@@ -233,11 +233,12 @@ impl Client {
             } else {
                 channels.reply_recv.recv().unwrap()
             };
-            let data_len = validate_reply(&reply)?;
-            let mut rest_len = data_len;
+            let data_len = LE::read_u32(&reply[2..6]) as usize - REPLY_HEADER_SIZE + 6;
+            validate_reply(&reply)?;
 
             // Distribute the data into the user output buffers.
             let mut offset = REPLY_HEADER_SIZE;
+            let mut rest_len = data_len;
             for buf in data_out {
                 let n = buf.len().min(rest_len);
                 buf.copy_from_slice(&reply[offset..offset + n]);
@@ -250,23 +251,40 @@ impl Client {
 
             // Send back the Vec buffer to the reader thread.
             channels.buf_send.send(reply).unwrap();
+
+            // Return either the error or the length of data.
             Ok(data_len)
         } else {
             // Read and check the incoming header.
             self.socket.read_exact(&mut header_out)?;
-            let data_len = validate_reply(&header_out)?;
+            let data_len = LE::read_u32(&header_out[2..6]) as usize - REPLY_HEADER_SIZE + 6;
             let mut rest_len = data_len;
+            match validate_reply(&header_out) {
+                Ok(_) => {
+                    // Read the incoming user data.
+                    for buf in data_out {
+                        let n = buf.len().min(rest_len);
+                        self.socket.read_exact(&mut buf[..n])?;
+                        rest_len -= n;
+                        if rest_len == 0 {
+                            break;
+                        }
+                    }
 
-            // Read the incoming user data.
-            for buf in data_out {
-                let n = buf.len().min(rest_len);
-                self.socket.read_exact(&mut buf[..n])?;
-                rest_len -= n;
-                if rest_len == 0 {
-                    break;
+                    Ok(data_len)
+                }
+                Err(e) => {
+                    // Read the incoming data but throw it away.
+                    let mut dummy = [0; 1024];
+                    while rest_len > 0 {
+                        let n = dummy.len().min(rest_len);
+                        self.socket.read_exact(&mut dummy[..n])?;
+                        rest_len -= n;
+                    }
+
+                    Err(e)
                 }
             }
-            Ok(data_len)
         }
     }
 }
@@ -349,7 +367,8 @@ impl Device {
         let mut header = [0; 12];
         LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
         let mut len = [0; 4];
-        self.client.communicate(Command::Read, self.addr, &[&header], &mut [&mut len, data])
+        self.client.communicate(Command::Read, self.addr, &[&header], &mut [&mut len, data])?;
+        Ok(u32::from_le_bytes(len) as usize)
     }
 
     /// Read some data at a given index group/offset.
@@ -376,8 +395,9 @@ impl Device {
         LE::write_u32_into(&[index_group, index_offset,
                              read_data.len().try_into()?, write_data.len().try_into()?], &mut header);
         let mut len = [0; 4];
-        self.client.communicate(Command::Read, self.addr,
-                                &[&header, write_data], &mut [&mut len, read_data])
+        self.client.communicate(Command::ReadWrite, self.addr,
+                                &[&header, write_data], &mut [&mut len, read_data])?;
+        Ok(u32::from_le_bytes(len) as usize)
     }
 
     /// Return the ADS and device state of the device.
@@ -391,7 +411,7 @@ impl Device {
     pub fn write_control(&mut self, ads_state: AdsState, dev_state: u16) -> Result<()> {
         let mut data = [0; 8];
         LE::write_u16_into(&[ads_state as u16, dev_state], &mut data[..4]);
-        self.client.communicate(Command::Write, self.addr, &[&data], &mut [])?;
+        self.client.communicate(Command::WriteControl, self.addr, &[&data], &mut [])?;
         Ok(())
     }
 

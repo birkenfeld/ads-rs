@@ -95,6 +95,7 @@ impl UdpMessage {
         if data_ptr.read_u32::<LE>()? != service | 0x8000_0000 {
             return Err(Error::Udp("operation acknowledge missing"));
         }
+        let _src = AmsAddr::read_from(&mut data_ptr)?;
         let nitems = data_ptr.read_u32::<LE>()?;
 
         let mut items = Vec::with_capacity(nitems as usize);
@@ -145,7 +146,7 @@ impl UdpMessage {
     /// Send the packet and receive a reply from the server.
     pub fn send_receive(&self, dest: &str) -> Result<UdpMessage> {
         // Send self as a request.
-        let sock = UdpSocket::bind("127.0.0.1:0")?;
+        let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.send_to(self.as_bytes(), format!("{}:{}", dest, crate::ADS_UDP_PORT))?;
 
         // Receive the reply.

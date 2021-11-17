@@ -32,6 +32,7 @@ impl<'a> io::Write for File<'a> {
                        Error::Io(ioe) => ioe,
                        _ => io::Error::new(io::ErrorKind::Other, e.to_string())
                    })
+                   // no info about written length is returned
                    .map(|_| data.len())
     }
 
@@ -47,7 +48,6 @@ impl<'a> std::io::Read for File<'a> {
                        Error::Io(ioe) => ioe,
                        _ => io::Error::new(io::ErrorKind::Other, e.to_string())
                    })
-                   .map(|_| data.len())
     }
 }
 
