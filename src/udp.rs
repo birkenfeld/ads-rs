@@ -1,7 +1,7 @@
 //! Implements the Beckhoff UDP message protocol for basic operations.
 
 use std::io::Write;
-use std::net::UdpSocket;
+use std::net::{ToSocketAddrs, UdpSocket};
 use std::str;
 
 use byteorder::{LE, ReadBytesExt, WriteBytesExt, ByteOrder};
@@ -144,10 +144,10 @@ impl UdpMessage {
     }
 
     /// Send the packet and receive a reply from the server.
-    pub fn send_receive(&self, dest: &str) -> Result<UdpMessage> {
+    pub fn send_receive(&self, to: impl ToSocketAddrs) -> Result<UdpMessage> {
         // Send self as a request.
         let sock = UdpSocket::bind("0.0.0.0:0")?;
-        sock.send_to(self.as_bytes(), format!("{}:{}", dest, crate::ADS_UDP_PORT))?;
+        sock.send_to(self.as_bytes(), to)?;
 
         // Receive the reply.
         let mut reply = [0; 576];
