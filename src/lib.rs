@@ -16,6 +16,7 @@ pub mod errors;
 pub mod ports;
 pub mod index;
 pub mod file;
+pub mod symbol;
 
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
 pub use tcp::{Client, Device};

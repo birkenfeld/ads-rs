@@ -125,7 +125,7 @@ impl FromStr for AmsAddr {
     /// Parse an AMS address from a string (netid:port).
     fn from_str(s: &str) -> Result<AmsAddr, &'static str> {
         let (addr, port) = s.split(':').collect_tuple()
-                                       .ok_or_else(|| "invalid AMS addr string")?;
+                                       .ok_or("invalid AMS addr string")?;
         Ok(Self(addr.parse()?, port.parse().map_err(|_| "invalid port number")?))
     }
 }
