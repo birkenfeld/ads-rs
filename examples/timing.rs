@@ -18,12 +18,14 @@ fn main_dumb() {
 }
 
 fn main_client() {
-    let mut client = Client::new("127.0.0.1:48999", None, None).unwrap();
-    client.get_notification_channel();
-    let mut dev = client.device(ads::AmsAddr::new([1,2,3,4,5,6].into(), 851));
+    // let mut client = Client::new("127.0.0.1:48999", None, None).unwrap();
+    let mut client = Client::new("127.0.0.1:48898", ads::Timeouts::none(),
+                                 Some(ads::AmsAddr::new([172,25,45,24,1,1].into(), 800))).unwrap();
+    // client.get_notification_channel();
+    let mut dev = client.device(ads::AmsAddr::new([5,62,215,36,1,1].into(), 851));
     let mut data = [0; 4];
     let now = std::time::Instant::now();
-    for _ in 0..5000 {
+    for _ in 0..50 {
         dev.read(0x4020, 0, &mut data).unwrap();
     }
     println!("client: {:?}", now.elapsed());

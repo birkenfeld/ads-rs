@@ -291,21 +291,22 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
             let amsaddr = ads::AmsAddr::new(netid, amsport);
-            let mut dev = ads::Client::new(tcp_addr, None, None)?.device(amsaddr);
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
             match subargs {
                 FileAction::Read { path } => {
-                    let mut file = file::File::open(&mut dev, &path,
+                    let mut file = file::File::open(dev, &path,
                                                     file::READ | file::BINARY | file::ENSURE_DIR)?;
                     std::io::copy(&mut file, &mut stdout())?;
                 }
                 FileAction::Write { path, append } => {
                     let flag = if append { ads::file::APPEND } else { ads::file::WRITE };
-                    let mut file = file::File::open(&mut dev, &path,
+                    let mut file = file::File::open(dev, &path,
                                                     flag | file::BINARY | file::PLUS | file::ENSURE_DIR)?;
                     std::io::copy(&mut stdin(), &mut file)?;
                 }
                 FileAction::Delete { path } => {
-                    file::File::delete(&mut dev, &path, file::ENABLE_DIR)?;
+                    file::File::delete(dev, &path, file::ENABLE_DIR)?;
                 }
             }
         }
@@ -313,7 +314,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
             let amsaddr = ads::AmsAddr::new(netid, amsport);
-            let mut dev = ads::Client::new(tcp_addr, None, None)?.device(amsaddr);
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
             let (state, dev_state) = dev.get_state()?;
             println!("Current state: {:?}", state);
             if let Some(newstate) = subargs.target_state {
@@ -325,7 +327,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::LICENSE_SERVER);
             let amsaddr = ads::AmsAddr::new(netid, amsport);
-            let mut dev = ads::Client::new(tcp_addr, None, None)?.device(amsaddr);
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
             match object {
                 LicenseAction::Platformid => {
                     let mut id = [0; 2];
@@ -351,7 +354,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
             let amsaddr = ads::AmsAddr::new(netid, amsport);
-            let mut dev = ads::Client::new(tcp_addr, None, None)?.device(amsaddr);
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
             match subargs {
                 RawAction::Read { index_group, index_offset, length, r#type, hex } => {
                     if let Some(length) = length {
@@ -389,8 +393,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
             let amsaddr = ads::AmsAddr::new(netid, amsport);
-            let mut dev = ads::Client::new(tcp_addr, None, None)?.device(amsaddr);
-            let mut handle = ads::symbol::Handle::new(&mut dev, &subargs.name)?;
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
+            let mut handle = ads::symbol::Handle::new(dev, &subargs.name)?;
             let typ = subargs.r#type;
 
             // Write or read data?

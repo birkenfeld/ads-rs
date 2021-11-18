@@ -84,7 +84,7 @@ impl Display for AmsNetId {
 }
 
 /// Combination of an AMS NetID and a port.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AmsAddr(AmsNetId, AmsPort);
 
 impl AmsAddr {

@@ -1,5 +1,7 @@
 //! Contains the TCP client to connect to an ADS server.
 
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::convert::{TryFrom, TryInto};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
@@ -45,45 +47,61 @@ const HEADER_SIZE: usize = 38;
 const REPLY_HEADER_SIZE: usize = HEADER_SIZE + 4;  // with result field
 const DEFAULT_BUFFER_SIZE: usize = 100;
 
-/// Represents a connection to a ADS server.
-pub struct Client {
-    invoke_id: u32,
-    socket: TcpStream,
-    read_timeout: Option<Duration>,
-    channels: Option<Channels>,
-    source: AmsAddr,
-    write_buf: Vec<u8>,
+#[derive(Clone, Copy, Debug)]
+pub struct Timeouts {
+    connect: Option<Duration>,
+    read: Option<Duration>,
+    write: Option<Duration>,
 }
 
-/// Implementation detail: once a notification is created, we switch to reading replies
-/// from a separate thread and send around buffers via channels.
-struct Channels {
+impl Timeouts {
+    pub fn new(duration: Duration) -> Self {
+        Self { connect: Some(duration), read: Some(duration), write: Some(duration) }
+    }
+
+    pub fn none() -> Self {
+        Self { connect: None, read: None, write: None }
+    }
+}
+
+/// Represents a connection to a ADS server.
+pub struct Client {
+    invoke_id: Cell<u32>,
+    socket: TcpStream,
+    read_timeout: Option<Duration>,
+    source: AmsAddr,
     buf_send: Sender<Vec<u8>>,
     reply_recv: Receiver<Vec<u8>>,
     notif_recv: Receiver<notify::Notification>,
+    /// active notification handles
+    notif_handles: RefCell<BTreeSet<(AmsAddr, notify::Handle)>>,
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
-        // Need to shutdown the connection since the socket may still be
-        // duplicated in the reader thread.  This will cause the read() in the
-        // thread to return with no data.
+        // Close all open notification handles.
+        for &(addr, handle) in &*self.notif_handles.borrow() {
+            let _ = self.device(addr).delete_notification(handle);
+        }
+
+        // Need to shutdown the connection since the socket is duplicated in the
+        // reader thread.  This will cause the read() in the thread to return
+        // with no data.
         let _ = self.socket.shutdown(Shutdown::Both);
     }
 }
 
 impl Client {
     /// Open a new connection to an ADS server.
-    pub fn new(addr: impl ToSocketAddrs,
-               connect_timeout: Option<Duration>,
-               source: Option<AmsAddr>) -> Result<Self> {
+    pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Option<AmsAddr>) -> Result<Self> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
-        let socket = if let Some(timeout) = connect_timeout {
+        let socket = if let Some(timeout) = timeouts.connect {
             TcpStream::connect_timeout(&addr, timeout)?
         } else {
             TcpStream::connect(&addr)?
         };
         socket.set_nodelay(true)?;
+        socket.set_write_timeout(timeouts.write)?;
         let source = match source {
             Some(id) => id,
             None => {
@@ -96,60 +114,40 @@ impl Client {
                 }
             }
         };
-        Ok(Client {
-            invoke_id: 0,
-            channels: None,
-            read_timeout: None,
-            write_buf: Vec::with_capacity(1024),
-            socket,
-            source,
-        })
-    }
-
-    /// Get a receiver for notifications.
-    pub fn get_notification_channel(&mut self) -> Receiver<notify::Notification> {
-        if self.channels.is_none() {
-            self.start_async();
-        }
-        self.channels.as_ref().unwrap().notif_recv.clone()
-    }
-
-    // Start a separate thread to handle notifications and replies on the same socket.
-    fn start_async(&mut self) {
-        assert!(self.channels.is_none());
-        let socket = self.socket.try_clone().expect("cloning socket");
+        let socket_clone = socket.try_clone()?;
         let (buf_send, buf_recv) = bounded(10);
         let (reply_send, reply_recv) = bounded(1);
         let (notif_send, notif_recv) = unbounded();
-        let mut source = [0; 8];
-        self.source.write_to(&mut source.as_mut_slice()).unwrap();
+        let mut source_bytes = [0; 8];
+        source.write_to(&mut &mut source_bytes[..]).unwrap();
         let reader = Reader {
-            socket,
-            source,
+            socket: socket_clone,
+            source: source_bytes,
             buf_recv,
             reply_send,
             notif_send,
         };
-        self.channels = Some(Channels {
+        std::thread::spawn(|| reader.run());
+        Ok(Client {
+            socket,
+            source,
             buf_send,
             reply_recv,
             notif_recv,
-        });
-        std::thread::spawn(|| reader.run());
+            invoke_id: Cell::new(0),
+            read_timeout: timeouts.read,
+            notif_handles: Default::default(),
+        })
     }
 
-    /// Set the read and write timeout for socket read and write operations.
-    pub fn set_timeouts(&mut self, read_timeout: Option<Duration>,
-                       write_timeout: Option<Duration>) -> Result<()> {
-        self.read_timeout = read_timeout;
-        self.socket.set_read_timeout(read_timeout)?;
-        self.socket.set_write_timeout(write_timeout)?;
-        Ok(())
+    /// Get a receiver for notifications.
+    pub fn get_notification_channel(&self) -> Receiver<notify::Notification> {
+        self.notif_recv.clone()
     }
 
     /// Return a wrapper that executes operations for a target device (known by
     /// Net-ID and port).
-    pub fn device(self, addr: AmsAddr) -> Device {
+    pub fn device(&self, addr: AmsAddr) -> Device<'_> {
         Device { client: self, addr }
     }
 
@@ -157,16 +155,14 @@ impl Client {
     ///
     /// Writes a data from a number of input buffers, and returns data in
     /// a number of output buffers.
-    pub fn communicate(&mut self,
+    pub fn communicate(&self,
                        cmd: Command,
                        target: AmsAddr,
                        data_in: &[&[u8]],
                        data_out: &mut [&mut [u8]]) -> Result<usize> {
-        self.invoke_id = self.invoke_id.wrapping_add(1);
+        self.invoke_id.set(self.invoke_id.get().wrapping_add(1));
         let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
-        let data_out_len = data_out.iter().map(|v| v.len()).sum::<usize>();
         let mut header_in = [0; HEADER_SIZE];
-        let mut header_out = [0; REPLY_HEADER_SIZE];
 
         // Fill the outgoing header.
         // first two bytes are always 0
@@ -179,15 +175,15 @@ impl Client {
         ptr.write_u16::<LE>(4)?;                   // state flags (4 = send command)
         ptr.write_u32::<LE>(data_in_len as u32)?;  // length (overflow checked above)
         ptr.write_u32::<LE>(0)?;                   // error, always 0 when sending
-        ptr.write_u32::<LE>(self.invoke_id)?;      // invoke ID
+        ptr.write_u32::<LE>(self.invoke_id.get())?;      // invoke ID
 
         // Write the outgoing header and user data.
-        self.write_buf.clear();
-        self.write_buf.extend_from_slice(&header_in);
+        let mut write_buf = Vec::with_capacity(HEADER_SIZE + data_in_len);
+        write_buf.extend_from_slice(&header_in);
         for buf in data_in {
-            self.write_buf.extend_from_slice(buf);
+            write_buf.extend_from_slice(buf);
         }
-        self.socket.write_all(&self.write_buf)?;
+        (&self.socket).write_all(&write_buf)?;
 
         // Validation of the incoming reply.
         let validate_reply = |header_out: &[u8]| {
@@ -198,7 +194,7 @@ impl Client {
             // validate other fields
             let mut ptr = &header_out[24..];
             let state_flags = ptr.read_u16::<LE>()?;
-            let data_len = ptr.read_u32::<LE>()? as usize;
+            let _len = ptr.read_u32::<LE>()?;  // includes result field
             let error_code = ptr.read_u32::<LE>()?;
             let invoke_id = ptr.read_u32::<LE>()?;
             let result = ptr.read_u32::<LE>()?;
@@ -207,19 +203,15 @@ impl Client {
             if state_flags != 5 {
                 return Err(Error::Communication("unexpected state flags", state_flags as u32));
             }
-            // length of return data
-            if data_len > data_out_len + 4 {
-                return Err(Error::Communication("excessive reply data length", data_len as u32));
+            // invoke ID must match what we sent
+            if invoke_id != self.invoke_id.get() {
+                return Err(Error::Communication("unexpected invoke ID", invoke_id));
             }
-            // error code (can be in two positions)
+            // error code in AMS header
             if error_code != 0 {
                 return ads_error(error_code);
             }
-            // invoke ID must match what we sent
-            if invoke_id != self.invoke_id {
-                return Err(Error::Communication("unexpected invoke ID", invoke_id));
-            }
-            // error code (result field)
+            // result field in payload, only relevant if error_code == 0
             if result != 0 {
                 return ads_error(result);
             }
@@ -227,68 +219,38 @@ impl Client {
             Ok(())
         };
 
-        if let Some(channels) = &self.channels {
-            // Get a reply from the reader thread, with timeout or not.
-            let reply = if let Some(tmo) = self.read_timeout {
-                channels.reply_recv.recv_timeout(tmo).map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::TimedOut, "read timeout")
-                })?
-            } else {
-                channels.reply_recv.recv().unwrap()
-            };
-            let data_len = LE::read_u32(&reply[2..6]) as usize - REPLY_HEADER_SIZE + 6;
-            validate_reply(&reply)?;
-
-            // Distribute the data into the user output buffers.
-            let mut offset = REPLY_HEADER_SIZE;
-            let mut rest_len = data_len;
-            for buf in data_out {
-                let n = buf.len().min(rest_len);
-                buf.copy_from_slice(&reply[offset..offset + n]);
-                offset += n;
-                rest_len -= n;
-                if rest_len == 0 {
-                    break;
-                }
-            }
-
-            // Send back the Vec buffer to the reader thread.
-            channels.buf_send.send(reply).unwrap();
-
-            // Return either the error or the length of data.
-            Ok(data_len)
+        // Get a reply from the reader thread, with timeout or not.
+        let reply = if let Some(tmo) = self.read_timeout {
+            self.reply_recv.recv_timeout(tmo).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "read timeout")
+            })?
         } else {
-            // Read and check the incoming header.
-            self.socket.read_exact(&mut header_out)?;
-            let data_len = LE::read_u32(&header_out[2..6]) as usize - REPLY_HEADER_SIZE + 6;
-            let mut rest_len = data_len;
-            match validate_reply(&header_out) {
-                Ok(_) => {
-                    // Read the incoming user data.
-                    for buf in data_out {
-                        let n = buf.len().min(rest_len);
-                        self.socket.read_exact(&mut buf[..n])?;
-                        rest_len -= n;
-                        if rest_len == 0 {
-                            break;
-                        }
-                    }
+            self.reply_recv.recv().unwrap()
+        };
 
-                    Ok(data_len)
-                }
-                Err(e) => {
-                    // Read the incoming data but throw it away.
-                    let mut dummy = [0; 1024];
-                    while rest_len > 0 {
-                        let n = dummy.len().min(rest_len);
-                        self.socket.read_exact(&mut dummy[..n])?;
-                        rest_len -= n;
-                    }
+        validate_reply(&reply)?;
 
-                    Err(e)
-                }
+        // pure data length, without result field
+        let data_len = LE::read_u32(&reply[2..6]) as usize + 6 - REPLY_HEADER_SIZE;
+
+        // Distribute the data into the user output buffers.
+        let mut offset = REPLY_HEADER_SIZE;
+        let mut rest_len = data_len;
+        for buf in data_out {
+            let n = buf.len().min(rest_len);
+            buf.copy_from_slice(&reply[offset..offset + n]);
+            offset += n;
+            rest_len -= n;
+            if rest_len == 0 {
+                break;
             }
         }
+
+        // Send back the Vec buffer to the reader thread.
+        self.buf_send.send(reply).unwrap();
+
+        // Return either the error or the length of data.
+        Ok(data_len)
     }
 }
 
@@ -327,10 +289,8 @@ impl Reader {
             buf.resize(HEADER_SIZE + rest_length, 0);
             self.socket.read_exact(&mut buf[HEADER_SIZE..])?;
 
-            let mut ptr = &buf[22..];
-
             // If it's a reply, send it back to the requesting thread.
-            if ptr.read_u16::<LE>().unwrap() != Command::Notification as u16 {
+            if LE::read_u16(&buf[22..24]) != Command::Notification as u16 {
                 self.reply_send.send(buf).unwrap();
                 continue;
             }
@@ -341,37 +301,32 @@ impl Reader {
             }
 
             // Validate notification message fields.
-            let state_flags = ptr.read_u16::<LE>().unwrap();
-            let error_code = ptr.read_u32::<LE>().unwrap();
-            let invoke_id = ptr.read_u32::<LE>().unwrap();
-            let length = ptr.read_u32::<LE>().unwrap() as usize;
-
-            if state_flags != 1 || error_code != 0 || length != rest_length {
-                dbg!(state_flags, error_code, rest_length, invoke_id);
+            let state_flags = LE::read_u16(&buf[24..26]);
+            let error_code = LE::read_u32(&buf[30..34]);
+            let length = LE::read_u32(&buf[38..42]) as usize;
+            if state_flags != 4 || error_code != 0 || length != rest_length - 4 || length < 4 {
                 continue;
             }
 
             // Send the notification to whoever wants to receive it.
-            self.notif_send.send(notify::Notification::new(buf)).unwrap();
+            if let Ok(notif) = notify::Notification::new(buf) {
+                self.notif_send.send(notif).unwrap();
+            }
         }
     }
 }
 
 
 /// A `Client` that talks to a specific ADS device.
-pub struct Device {
-    client: Client,
+#[derive(Clone, Copy)]
+pub struct Device<'c> {
+    client: &'c Client,
     addr: AmsAddr,
 }
 
-impl Device {
-    /// Return back the `Client` of the device.
-    pub fn into_inner(self) -> Client {
-        self.client
-    }
-
+impl<'c> Device<'c> {
     /// Read the devices' name + version.
-    pub fn get_info(&mut self) -> Result<DeviceInfo> {
+    pub fn get_info(&self) -> Result<DeviceInfo> {
         let mut data = [0; 20];
         self.client.communicate(Command::DevInfo, self.addr, &[], &mut [&mut data])?;
         let name = data[4..].iter().take_while(|&&ch| ch > 0)
@@ -385,7 +340,7 @@ impl Device {
     }
 
     /// Read some data at a given index group/offset.
-    pub fn read(&mut self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<usize> {
+    pub fn read(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<usize> {
         let mut header = [0; 12];
         LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
         let mut len = [0; 4];
@@ -394,7 +349,7 @@ impl Device {
     }
 
     /// Read some data at a given index group/offset.
-    pub fn read_exact(&mut self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<()> {
+    pub fn read_exact(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<()> {
         if self.read(index_group, index_offset, data)? != data.len() {
             return Err(Error::Communication("returned less data than expected", data.len() as u32));
         }
@@ -402,7 +357,7 @@ impl Device {
     }
 
     /// Write some data to a given index group/offset.
-    pub fn write(&mut self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
+    pub fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
         let mut header = [0; 12];
         LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
         self.client.communicate(Command::Write, self.addr, &[&header, data], &mut [])?;
@@ -411,7 +366,7 @@ impl Device {
 
     /// Write some data to a given index group/offset and then read back some reply from there.
     /// This is not the same as a write() followed by read(); it is used as a kind of RPC call.
-    pub fn write_read(&mut self, index_group: u32, index_offset: u32, write_data: &[u8],
+    pub fn write_read(&self, index_group: u32, index_offset: u32, write_data: &[u8],
                       read_data: &mut [u8]) -> Result<usize> {
         let mut header = [0; 16];
         LE::write_u32_into(&[index_group, index_offset,
@@ -423,14 +378,14 @@ impl Device {
     }
 
     /// Return the ADS and device state of the device.
-    pub fn get_state(&mut self) -> Result<(AdsState, u16)> {
+    pub fn get_state(&self) -> Result<(AdsState, u16)> {
         let mut data = [0; 4];
         self.client.communicate(Command::ReadState, self.addr, &[], &mut [&mut data])?;
         Ok((AdsState::try_from(LE::read_u16(&data))?, LE::read_u16(&data[2..])))
     }
 
     /// (Try to) set the ADS and device state of the device.
-    pub fn write_control(&mut self, ads_state: AdsState, dev_state: u16) -> Result<()> {
+    pub fn write_control(&self, ads_state: AdsState, dev_state: u16) -> Result<()> {
         let mut data = [0; 8];
         LE::write_u16_into(&[ads_state as u16, dev_state], &mut data[..4]);
         self.client.communicate(Command::WriteControl, self.addr, &[&data], &mut [])?;
@@ -438,11 +393,8 @@ impl Device {
     }
 
     /// Add a notification handle for some index group/offset.
-    pub fn add_notification(&mut self, index_group: u32, index_offset: u32,
+    pub fn add_notification(&self, index_group: u32, index_offset: u32,
                             attributes: notify::Attributes) -> Result<notify::Handle> {
-        // Need to go to async mode before a notification can arrive
-        self.client.start_async();
-
         let mut data = [0; 40];
         LE::write_u32_into(&[index_group,
                              index_offset,
@@ -455,13 +407,16 @@ impl Device {
         let mut handle = [0; 4];
         self.client.communicate(Command::AddNotification, self.addr,
                                 &[&data], &mut [&mut handle])?;
-        Ok(u32::from_le_bytes(handle))
+        let handle = u32::from_le_bytes(handle);
+        self.client.notif_handles.borrow_mut().insert((self.addr, handle));
+        Ok(handle)
     }
 
     /// Delete a notification with given handle.
-    pub fn delete_notification(&mut self, handle: notify::Handle) -> Result<()> {
+    pub fn delete_notification(&self, handle: notify::Handle) -> Result<()> {
         let data = handle.to_le_bytes();
         self.client.communicate(Command::DeleteNotification, self.addr, &[&data], &mut [])?;
+        self.client.notif_handles.borrow_mut().remove(&(self.addr, handle));
         Ok(())
     }
 }

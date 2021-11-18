@@ -19,7 +19,7 @@ pub mod file;
 pub mod symbol;
 
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
-pub use tcp::{Client, Device};
+pub use tcp::{Client, Device, Timeouts};
 pub use udp::UdpMessage;
 pub use errors::{Error, Result};
 

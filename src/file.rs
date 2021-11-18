@@ -5,17 +5,17 @@ use std::io;
 use crate::{Device, Error, Result};
 use crate::index;
 
-pub struct File<'a> {
-    device: &'a mut Device,
+pub struct File<'c> {
+    device: Device<'c>,
     handle: u32,
 }
 
-impl<'a> File<'a> {
-    pub fn delete(device: &mut Device, filename: impl AsRef<[u8]>, flags: u32) -> Result<()> {
+impl<'c> File<'c> {
+    pub fn delete(device: Device, filename: impl AsRef<[u8]>, flags: u32) -> Result<()> {
         device.write_read(index::SYS_FILE_DELETE, flags, filename.as_ref(), &mut []).map(drop)
     }
 
-    pub fn open(device: &'a mut Device, filename: impl AsRef<[u8]>, flags: u32) -> Result<Self> {
+    pub fn open(device: Device<'c>, filename: impl AsRef<[u8]>, flags: u32) -> Result<Self> {
         let mut hdl = [0; 4];
         device.write_read(index::SYS_FILE_OPEN, flags, filename.as_ref(), &mut hdl)?;
         Ok(File {

@@ -4,14 +4,14 @@ use crate::{Device, Result};
 use crate::index;
 
 /// A handle to a variable within the ADS device.
-pub struct Handle<'a> {
-    device: &'a mut Device,
+pub struct Handle<'c> {
+    device: Device<'c>,
     handle: u32,
 }
 
-impl<'a> Handle<'a> {
+impl<'c> Handle<'c> {
     /// Create a new handle to a single symbol.
-    pub fn new(device: &'a mut Device, symbol: &str) -> Result<Self> {
+    pub fn new(device: Device<'c>, symbol: &str) -> Result<Self> {
         let mut handle_bytes = [0; 4];
         device.write_read(index::SYS_GET_SYMHANDLE_BYNAME, 0, symbol.as_bytes(),
                           &mut handle_bytes)?;
