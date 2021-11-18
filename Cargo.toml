@@ -8,9 +8,6 @@ description = "Client for the Beckhoff Automation Device Specification protocol 
 repository = "https://github.com/birkenfeld/ads-rs"
 keywords = ["Beckhoff", "ADS", "automation", "device", "PLC"]
 
-[profile.release]
-lto = true
-
 [dependencies]
 byteorder = "1.4.3"
 crossbeam-channel = "0.5.1"

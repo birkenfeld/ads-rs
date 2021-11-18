@@ -3,7 +3,7 @@
 use std::{io::{Read, Write, stdin, stdout}, str::FromStr};
 
 use parse_int::parse;
-use structopt::{StructOpt, clap::AppSettings};
+use structopt::{StructOpt, clap::ArgGroup, clap::AppSettings};
 use strum::EnumString;
 
 #[derive(StructOpt, Debug)]
@@ -117,6 +117,7 @@ struct StateArgs {
 enum RawAction {
     /// Read some data from an index.  Specify either --length (to print raw
     /// bytes) or --type (to convert to a data type and print that).
+    #[structopt(group = ArgGroup::with_name("spec").required(true))]
     Read {
         /// the index group, can be 0xABCD
         #[structopt(parse(try_from_str = parse))]
@@ -125,10 +126,10 @@ enum RawAction {
         #[structopt(parse(try_from_str = parse))]
         index_offset: u32,
         /// the length, can be 0xABCD
-        #[structopt(long, parse(try_from_str = parse), required_unless = "type")]
+        #[structopt(long, parse(try_from_str = parse), group = "spec")]
         length: Option<usize>,
         /// the data type
-        #[structopt(long, required_unless = "length")]
+        #[structopt(long, group = "spec")]
         r#type: Option<VarType>,
         /// whether to print integers as hex
         #[structopt(long)]
@@ -144,6 +145,7 @@ enum RawAction {
         index_offset: u32,
     },
     /// Write some data (read from stdin), then read data from an index.
+    #[structopt(group = ArgGroup::with_name("spec").required(true))]
     WriteRead {
         /// the index group, can be 0xABCD
         #[structopt(parse(try_from_str = parse))]
@@ -152,10 +154,10 @@ enum RawAction {
         #[structopt(parse(try_from_str = parse))]
         index_offset: u32,
         /// the length to read, can be 0xABCD
-        #[structopt(parse(try_from_str = parse), required_unless = "read_type")]
+        #[structopt(long, parse(try_from_str = parse), group = "spec")]
         read_length: Option<usize>,
         /// the data type to interpret the read data as
-        #[structopt(long, required_unless = "read_length")]
+        #[structopt(long, group = "spec")]
         read_type: Option<VarType>,
         /// whether to print integers as hex
         #[structopt(long)]
@@ -332,12 +334,12 @@ fn main_inner(args: Args) -> Result<(), Error> {
             match object {
                 LicenseAction::Platformid => {
                     let mut id = [0; 2];
-                    dev.read(ads::index::SYS_LICENSE, 2, &mut id)?;
+                    dev.read(ads::index::LICENSE, 2, &mut id)?;
                     println!("{}", u16::from_le_bytes(id));
                 }
                 LicenseAction::Systemid => {
                     let mut id = [0; 16];
-                    dev.read(ads::index::SYS_LICENSE, 1, &mut id)?;
+                    dev.read(ads::index::LICENSE, 1, &mut id)?;
                     println!("{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-\
                               {:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
                              id[3], id[2], id[1], id[0], id[5], id[4], id[7], id[6], id[8], id[9],
@@ -345,7 +347,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
                 LicenseAction::Volumeno => {
                     let mut no = [0; 4];
-                    dev.read(ads::index::SYS_LICENSE, 5, &mut no)?;
+                    dev.read(ads::index::LICENSE, 5, &mut no)?;
                     println!("{}", u32::from_le_bytes(no));
                 }
             }

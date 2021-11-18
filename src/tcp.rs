@@ -162,62 +162,26 @@ impl Client {
                        data_out: &mut [&mut [u8]]) -> Result<usize> {
         self.invoke_id.set(self.invoke_id.get().wrapping_add(1));
         let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
-        let mut header_in = [0; HEADER_SIZE];
+        let mut request = Vec::with_capacity(HEADER_SIZE + data_in_len);
 
         // Fill the outgoing header.
         // first two bytes are always 0
-        let mut ptr = &mut header_in[2..];
         let rest_len = (HEADER_SIZE + data_in_len - 6).try_into()?;
-        ptr.write_u32::<LE>(rest_len)?;            // length of rest of message
-        target.write_to(&mut ptr)?;                // dest netid+port
-        self.source.write_to(&mut ptr)?;           // source netid+port
-        ptr.write_u16::<LE>(cmd as u16)?;          // command id
-        ptr.write_u16::<LE>(4)?;                   // state flags (4 = send command)
-        ptr.write_u32::<LE>(data_in_len as u32)?;  // length (overflow checked above)
-        ptr.write_u32::<LE>(0)?;                   // error, always 0 when sending
-        ptr.write_u32::<LE>(self.invoke_id.get())?;      // invoke ID
+        request.write_u16::<LE>(0)?;                   // initial padding
+        request.write_u32::<LE>(rest_len)?;            // length of rest of message
+        target.write_to(&mut request)?;                // dest netid+port
+        self.source.write_to(&mut request)?;           // source netid+port
+        request.write_u16::<LE>(cmd as u16)?;          // command id
+        request.write_u16::<LE>(4)?;                   // state flags (4 = send command)
+        request.write_u32::<LE>(data_in_len as u32)?;  // length (overflow checked above)
+        request.write_u32::<LE>(0)?;                   // error, always 0 when sending
+        request.write_u32::<LE>(self.invoke_id.get())?;      // invoke ID
 
         // Write the outgoing header and user data.
-        let mut write_buf = Vec::with_capacity(HEADER_SIZE + data_in_len);
-        write_buf.extend_from_slice(&header_in);
         for buf in data_in {
-            write_buf.extend_from_slice(buf);
+            request.extend_from_slice(buf);
         }
-        (&self.socket).write_all(&write_buf)?;
-
-        // Validation of the incoming reply.
-        let validate_reply = |header_out: &[u8]| {
-            // target netid/port must match what we sent
-            if header_out[6..14] != header_in[14..22] {
-                return Err(Error::Communication("unexpected return address", 0));
-            }
-            // validate other fields
-            let mut ptr = &header_out[24..];
-            let state_flags = ptr.read_u16::<LE>()?;
-            let _len = ptr.read_u32::<LE>()?;  // includes result field
-            let error_code = ptr.read_u32::<LE>()?;
-            let invoke_id = ptr.read_u32::<LE>()?;
-            let result = ptr.read_u32::<LE>()?;
-
-            // state flags must be "4 | 1"
-            if state_flags != 5 {
-                return Err(Error::Communication("unexpected state flags", state_flags as u32));
-            }
-            // invoke ID must match what we sent
-            if invoke_id != self.invoke_id.get() {
-                return Err(Error::Communication("unexpected invoke ID", invoke_id));
-            }
-            // error code in AMS header
-            if error_code != 0 {
-                return ads_error(error_code);
-            }
-            // result field in payload, only relevant if error_code == 0
-            if result != 0 {
-                return ads_error(result);
-            }
-
-            Ok(())
-        };
+        (&self.socket).write_all(&request)?;
 
         // Get a reply from the reader thread, with timeout or not.
         let reply = if let Some(tmo) = self.read_timeout {
@@ -228,10 +192,42 @@ impl Client {
             self.reply_recv.recv().unwrap()
         };
 
-        validate_reply(&reply)?;
+        // Validation of the incoming reply.
 
         // pure data length, without result field
         let data_len = LE::read_u32(&reply[2..6]) as usize + 6 - REPLY_HEADER_SIZE;
+
+        // target netid/port must match what we sent
+        if reply[6..14] != request[14..22] {
+            return Err(Error::Communication("unexpected return address", 0));
+        }
+        if reply[14..22] != request[6..14] {
+            return Err(Error::Communication("unexpected originating address", 0));
+        }
+        // validate other fields
+        let mut ptr = &reply[24..];
+        let state_flags = ptr.read_u16::<LE>()?;
+        let _len = ptr.read_u32::<LE>()?;  // includes result field
+        let error_code = ptr.read_u32::<LE>()?;
+        let invoke_id = ptr.read_u32::<LE>()?;
+        let result = ptr.read_u32::<LE>()?;
+
+        // state flags must be "4 | 1"
+        if state_flags != 5 {
+            return Err(Error::Communication("unexpected state flags", state_flags as u32));
+        }
+        // invoke ID must match what we sent
+        if invoke_id != self.invoke_id.get() {
+            return Err(Error::Communication("unexpected invoke ID", invoke_id));
+        }
+        // error code in AMS header
+        if error_code != 0 {
+            return ads_error(error_code);
+        }
+        // result field in payload, only relevant if error_code == 0
+        if result != 0 {
+            return ads_error(result);
+        }
 
         // Distribute the data into the user output buffers.
         let mut offset = REPLY_HEADER_SIZE;
@@ -254,8 +250,8 @@ impl Client {
     }
 }
 
-/// Implementation detail: reader thread that takes replies and notifications
-/// and distributes them accordingly.
+// Implementation detail: reader thread that takes replies and notifications
+// and distributes them accordingly.
 struct Reader {
     socket: TcpStream,
     source: [u8; 8],
@@ -317,7 +313,7 @@ impl Reader {
 }
 
 
-/// A `Client` that talks to a specific ADS device.
+/// A `Client` wrapper that talks to a specific ADS device.
 #[derive(Clone, Copy)]
 pub struct Device<'c> {
     client: &'c Client,
@@ -325,7 +321,7 @@ pub struct Device<'c> {
 }
 
 impl<'c> Device<'c> {
-    /// Read the devices' name + version.
+    /// Read the device's name + version.
     pub fn get_info(&self) -> Result<DeviceInfo> {
         let mut data = [0; 20];
         self.client.communicate(Command::DevInfo, self.addr, &[], &mut [&mut data])?;
@@ -364,8 +360,9 @@ impl<'c> Device<'c> {
         Ok(())
     }
 
-    /// Write some data to a given index group/offset and then read back some reply from there.
-    /// This is not the same as a write() followed by read(); it is used as a kind of RPC call.
+    /// Write some data to a given index group/offset and then read back some
+    /// reply from there.  This is not the same as a write() followed by read();
+    /// it is used as a kind of RPC call.
     pub fn write_read(&self, index_group: u32, index_offset: u32, write_data: &[u8],
                       read_data: &mut [u8]) -> Result<usize> {
         let mut header = [0; 16];
@@ -393,6 +390,13 @@ impl<'c> Device<'c> {
     }
 
     /// Add a notification handle for some index group/offset.
+    ///
+    /// Notifications are delivered via a MPMC channel whose reading end can be
+    /// obtained from `get_notification_channel` on the `Client` object.
+    ///
+    /// If the notification is not deleted explictly using
+    /// `delete_notification`, it is deleted when the `Client` object is
+    /// dropped.
     pub fn add_notification(&self, index_group: u32, index_offset: u32,
                             attributes: notify::Attributes) -> Result<notify::Handle> {
         let mut data = [0; 40];

@@ -16,76 +16,83 @@ pub const PLC_RW_DB: u32 = 0x4040;
 /// PLC: Read byte length of data area (only offset 0).
 pub const PLC_SIZE_DB: u32 = 0x4045;
 
-/// System service: Get u32 handle to the name in the write data.  Index offset is 0.
+/// Get u32 handle to the name in the write data.  Index offset is 0.
 /// Use with a `write_read` transaction.
-pub const SYS_GET_SYMHANDLE_BYNAME: u32 = 0xF003;
-/// System service: Read/write data for a symbol by handle.
+pub const GET_SYMHANDLE_BYNAME: u32 = 0xF003;
+/// Read/write data for a symbol by handle.
 /// Use the handle as the index offset.
-pub const SYS_RW_SYMVAL_BYHANDLE: u32 = 0xF005;
-/// System service: Relase a symbol handle.  Index offset is 0.
-pub const SYS_RELEASE_SYMHANDLE: u32 = 0xF006;
-
-/// System service: Read/write process image of physical inputs (%I fields).
-pub const SYS_RW_I: u32 = 0xF020;
-/// System service: Read/write process image of physical inputs as bits (%IX fields).
-pub const SYS_RW_IX: u32 = 0xF021;
-/// System service: Read byte length of the physical inputs (only offset 0).
-pub const SYS_SIZE_I: u32 = 0xF025;
-
-/// System service: Read/write process image of physical outputs (%Q fields).
-pub const SYS_RW_Q: u32 = 0xF030;
-/// System service: Read/write process image of physical outputs as bits (%QX fields).
-pub const SYS_RW_QX: u32 = 0xF031;
-/// System service: Read byte length of the physical outputs (only offset 0).
-pub const SYS_SIZE_Q: u32 = 0xF035;
-
-/// System service: Combine multiple index group/offset reads.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_READ: u32 = 0xF080;
-/// System service: Combine multiple index group/offset writes.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_WRITE: u32 = 0xF081;
-/// System service: Combine multiple index group/offset write+reads.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_READWRITE: u32 = 0xF082;
-/// System service: Combine multiple index group/offset reads.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_READ_EX: u32 = 0xF083;
-/// System service: Combine multiple index group/offset reads.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_READ_EX_2: u32 = 0xF084;
-/// System service: Combine multiple device notification adds.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_ADDDEVNOTE: u32 = 0xF085;
-/// System service: Combine multiple device notification deletes.
-/// See Beckhoff docs for the format of the data.
-pub const SYS_SUMUP_DELDEVNOTE: u32 = 0xF086;
+pub const RW_SYMVAL_BYHANDLE: u32 = 0xF005;
+/// Release a symbol handle.  Index offset is 0.
+pub const RELEASE_SYMHANDLE: u32 = 0xF006;
 
 // undocumented; from AdsDef.h
-pub const SYS_SYMTAB: u32 = 0xF000;
-pub const SYS_SYMNAME: u32 = 0xF001;
-pub const SYS_SYMVAL: u32 = 0xF002;
-pub const SYS_GET_SYMVAL_BYNAME: u32 = 0xF004;
-pub const SYS_GET_SYMINFO_BYNAME: u32 = 0xF007;
-pub const SYS_GET_SYMVERSION: u32 = 0xF008;
-pub const SYS_GET_SYMINFO_BYNAME_EX: u32 = 0xF009;
-pub const SYS_SYM_DOWNLOAD: u32 = 0xF00A;
-pub const SYS_SYM_UPLOAD: u32 = 0xF00B;
-pub const SYS_SYM_UPLOAD_INFO: u32 = 0xF00C;
-pub const SYS_SYM_DOWNLOAD2: u32 = 0xF00D;
-pub const SYS_SYM_DT_UPLOAD: u32 = 0xF00E;
-pub const SYS_SYM_UPLOAD_INFO2: u32 = 0xF00F;
-pub const SYS_SYM_NOTE: u32 = 0xF010;
-pub const SYS_CLEAR_I: u32 = 0xF040;
-pub const SYS_CLEAR_O: u32 = 0xF050;
-pub const SYS_RW_IOB: u32 = 0xF060;
+pub const SYMTAB: u32 = 0xF000;
+pub const SYMNAME: u32 = 0xF001;
+pub const SYMVAL: u32 = 0xF002;
+pub const GET_SYMVAL_BYNAME: u32 = 0xF004;
+pub const GET_SYMINFO_BYNAME: u32 = 0xF007;
+pub const GET_SYMVERSION: u32 = 0xF008;
+pub const GET_SYMINFO_BYNAME_EX: u32 = 0xF009;
+pub const SYM_DOWNLOAD: u32 = 0xF00A;
+pub const SYM_UPLOAD: u32 = 0xF00B;
+pub const SYM_UPLOAD_INFO: u32 = 0xF00C;
+pub const SYM_DOWNLOAD2: u32 = 0xF00D;
+pub const SYM_DT_UPLOAD: u32 = 0xF00E;
+pub const SYM_UPLOAD_INFO2: u32 = 0xF00F;
+pub const SYM_NOTE: u32 = 0xF010;
 
-/// File service index groups.
-pub const SYS_FILE_OPEN: u32 = 120;
-pub const SYS_FILE_CLOSE: u32 = 121;
-pub const SYS_FILE_READ: u32 = 122;
-pub const SYS_FILE_WRITE: u32 = 123;
-pub const SYS_FILE_DELETE: u32 = 131;
+/// Read/write process image of physical inputs (%I fields).
+pub const IO_RW_I: u32 = 0xF020;
+/// Read/write process image of physical inputs as bits (%IX fields).
+pub const IO_RW_IX: u32 = 0xF021;
+/// Read byte length of the physical inputs (only offset 0).
+pub const IO_SIZE_I: u32 = 0xF025;
+
+/// Read/write process image of physical outputs (%Q fields).
+pub const IO_RW_Q: u32 = 0xF030;
+/// Read/write process image of physical outputs as bits (%QX fields).
+pub const IO_RW_QX: u32 = 0xF031;
+/// Read byte length of the physical outputs (only offset 0).
+pub const IO_SIZE_Q: u32 = 0xF035;
+
+pub const IO_CLEAR_I: u32 = 0xF040;
+pub const IO_CLEAR_O: u32 = 0xF050;
+pub const IO_RW_IOB: u32 = 0xF060;
+
+pub const DEVICE_DATA: u32 = 0xF100;
+
+/// Combine multiple index group/offset reads.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_READ: u32 = 0xF080;
+/// Combine multiple index group/offset writes.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_WRITE: u32 = 0xF081;
+/// Combine multiple index group/offset write+reads.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_READWRITE: u32 = 0xF082;
+/// Combine multiple index group/offset reads.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_READ_EX: u32 = 0xF083;
+/// Combine multiple index group/offset reads.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_READ_EX_2: u32 = 0xF084;
+/// Combine multiple device notification adds.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_ADDDEVNOTE: u32 = 0xF085;
+/// Combine multiple device notification deletes.
+/// See Beckhoff docs for the format of the data.
+pub const SUMUP_DELDEVNOTE: u32 = 0xF086;
+
+/// File service: open a file.
+pub const FILE_OPEN: u32 = 120;
+/// File service: close an open file.
+pub const FILE_CLOSE: u32 = 121;
+/// File service: read from an open file.
+pub const FILE_READ: u32 = 122;
+/// File service: write to an open file.
+pub const FILE_WRITE: u32 = 123;
+/// File service: delete a file.
+pub const FILE_DELETE: u32 = 131;
 
 /// Index group for license queries.
-pub const SYS_LICENSE: u32 = 0x01010004;
+pub const LICENSE: u32 = 0x01010004;

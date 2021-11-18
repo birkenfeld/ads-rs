@@ -23,5 +23,7 @@ pub use tcp::{Client, Device, Timeouts};
 pub use udp::UdpMessage;
 pub use errors::{Error, Result};
 
+/// The default port for TCP communication.
 pub const ADS_PORT: u16 = 0xBF02;
+/// The default port for UDP communication.
 pub const ADS_UDP_PORT: u16 = 0xBF03;
