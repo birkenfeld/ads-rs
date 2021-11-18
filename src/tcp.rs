@@ -121,8 +121,11 @@ impl Client {
         let (buf_send, buf_recv) = bounded(10);
         let (reply_send, reply_recv) = bounded(1);
         let (notif_send, notif_recv) = unbounded();
+        let mut source = [0; 8];
+        self.source.write_to(&mut source.as_mut_slice()).unwrap();
         let reader = Reader {
             socket,
+            source,
             buf_recv,
             reply_send,
             notif_send,
@@ -293,6 +296,7 @@ impl Client {
 /// and distributes them accordingly.
 struct Reader {
     socket: TcpStream,
+    source: [u8; 8],
     buf_recv: Receiver<Vec<u8>>,
     reply_send: Sender<Vec<u8>>,
     notif_send: Sender<notify::Notification>,
@@ -323,14 +327,32 @@ impl Reader {
             buf.resize(HEADER_SIZE + rest_length, 0);
             self.socket.read_exact(&mut buf[HEADER_SIZE..])?;
 
-            // Check if it's a reply or a notification.
-            if LE::read_u16(&buf[16..18]) == Command::Notification as u16 {
-                // Read the rest of the message.
-                self.notif_send.send(notify::Notification::new(buf)).unwrap();
-            } else {
-                // Read the rest of the message.
+            let mut ptr = &buf[22..];
+
+            // If it's a reply, send it back to the requesting thread.
+            if ptr.read_u16::<LE>().unwrap() != Command::Notification as u16 {
                 self.reply_send.send(buf).unwrap();
+                continue;
             }
+
+            // Check that the notification is meant for us.
+            if buf[6..14] != self.source {
+                continue;
+            }
+
+            // Validate notification message fields.
+            let state_flags = ptr.read_u16::<LE>().unwrap();
+            let error_code = ptr.read_u32::<LE>().unwrap();
+            let invoke_id = ptr.read_u32::<LE>().unwrap();
+            let length = ptr.read_u32::<LE>().unwrap() as usize;
+
+            if state_flags != 1 || error_code != 0 || length != rest_length {
+                dbg!(state_flags, error_code, rest_length, invoke_id);
+                continue;
+            }
+
+            // Send the notification to whoever wants to receive it.
+            self.notif_send.send(notify::Notification::new(buf)).unwrap();
         }
     }
 }

@@ -2,14 +2,7 @@
 
 use std::time::Duration;
 
-/// A single notification message from the ADS server.
-pub struct Notification(Vec<u8>);
-
-impl Notification {
-    pub fn new(data: Vec<u8>) -> Self {
-        Self(data)
-    }
-}
+use crate::{Error, Result};
 
 /// A handle to the notification; this can be used to delete the notification later.
 pub type Handle = u32;
@@ -38,4 +31,19 @@ pub enum TransmissionMode {
     Client1Req = 2,
     ServerCycle = 3,
     ServerOnChange = 4,
+}
+
+/// A single notification message from the ADS server.
+pub struct Notification {
+    data: Vec<u8>,
+}
+
+impl Notification {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self { data }
+    }
+
+    pub fn parse(&mut self) -> Result<()> {
+        todo!()
+    }
 }
