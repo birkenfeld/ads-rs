@@ -109,6 +109,11 @@ impl Client {
     /// The AMS port of `source` is not important, as long as it is not a
     /// well-known service port; an ephemeral port number > 49152 is
     /// recommended.  If None, the port is set to 58913.
+    ///
+    /// Since all communications is supposed to be handled by an ADS router,
+    /// only one TCP/ADS connection can exist between two hosts. Non-TwinCAT
+    /// clients should make sure to replicate this behavior, as opening a second
+    /// connection will close the first.
     pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Option<AmsAddr>) -> Result<Self> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let socket = if let Some(timeout) = timeouts.connect {

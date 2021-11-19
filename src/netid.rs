@@ -18,11 +18,6 @@ use itertools::Itertools;
 /// Although often the first 4 bytes of a NetID look like an IP address, and
 /// sometimes even are identical to the device's IP address, there is no
 /// requirement for this, and one should never rely on it.
-// Instead, the mapping from logical NetIDs to IP addresses to communicate with
-// is done by an ADS router, which exists on every TwinCAT system. Since all
-// communications is handled by the router, only one TCP/ADS connection exists
-// between two hosts. Non-TwinCAT clients should make sure to replicate this
-// behavior, as opening a second connection will close the first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
 pub struct AmsNetId(pub [u8; 6]);
 

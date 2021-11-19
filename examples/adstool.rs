@@ -1,6 +1,8 @@
 //! Reproduces the functionality of "adstool" from the Beckhoff ADS C++ library.
 
-use std::{io::{Read, Write, stdin, stdout}, str::FromStr};
+use std::convert::TryInto;
+use std::io::{Read, Write, stdin, stdout};
+use std::str::FromStr;
 
 use parse_int::parse;
 use structopt::{StructOpt, clap::ArgGroup, clap::AppSettings};
@@ -16,17 +18,21 @@ struct Args {
     cmd: Cmd,
     /// Target for the command.
     ///
-    /// This can be `hostname[:port]` or include an AMS address
-    /// using `hostname[:port]/netid[:amsport]`, for example:
+    /// This can be `hostname[:port]` or include an AMS address using
+    /// `hostname[:port]/netid[:amsport]`, for example:
     ///
     /// localhost/5.23.91.23.1.1:851
     ///
     /// The IP port defaults to 0xBF02 (TCP) and 0xBF03 (UDP).
     ///
-    /// The AMS address is required for `file`, `license`, `state`, `raw` and
-    /// `var`.  The default AMS port depends on the command: `file` and `state`
-    /// default to the system service, `license` to the license service,
-    /// while `raw and `var` default to the first PLC instance (port 851).
+    /// An AMS address is required for `file`, `license`, `state`, `raw` and
+    /// `var`.  If it's not present, it is queried via UDP from the given
+    /// hostname, but only the connected router (normally `.1.1`) can be reached
+    /// in that way.
+    ///
+    /// The default AMS port depends on the command: `file` and `state` default
+    /// to the system service, `license` to the license service, while `raw and
+    /// `var` default to the first PLC instance (port 851).
     target: Target,
 }
 
@@ -263,6 +269,10 @@ fn main_inner(args: Args) -> Result<(), Error> {
     let target = args.target;
     let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::ADS_PORT));
     let udp_addr = (target.host.as_str(), target.port.unwrap_or(ads::ADS_UDP_PORT));
+    let get_netid = || match target.netid {
+        Some(netid) => Ok(netid),
+        None => ads::udp::get_netid((target.host.as_str(), ads::ADS_UDP_PORT)),
+    };
     match args.cmd {
         Cmd::Addroute(subargs) => {
             ads::udp::add_route(udp_addr, subargs.netid, &subargs.addr,
@@ -277,9 +287,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
         }
         Cmd::File(subargs) => {
             use ads::file;
-            let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
-            let amsaddr = ads::AmsAddr::new(netid, amsport);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
             match subargs {
@@ -300,9 +309,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
         }
         Cmd::State(subargs) => {
-            let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
-            let amsaddr = ads::AmsAddr::new(netid, amsport);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
             let info = dev.get_info()?;
@@ -315,9 +323,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
         }
         Cmd::License(object) => {
-            let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::LICENSE_SERVER);
-            let amsaddr = ads::AmsAddr::new(netid, amsport);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
             match object {
@@ -342,9 +349,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
         }
         Cmd::Raw(subargs) => {
-            let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
-            let amsaddr = ads::AmsAddr::new(netid, amsport);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
             match subargs {
@@ -381,9 +387,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
         }
         Cmd::Var(subargs) => {
             // Connect to the selected target, defaulting to the first PLC instance
-            let netid = target.netid.ok_or_else(|| Error::Str("target must contain NetID".into()))?;
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
-            let amsaddr = ads::AmsAddr::new(netid, amsport);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
             let mut handle = ads::symbol::Handle::new(dev, &subargs.name)?;
