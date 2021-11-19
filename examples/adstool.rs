@@ -41,7 +41,7 @@ enum Cmd {
     Addroute(AddRouteArgs),
     File(FileAction),
     License(LicenseAction),
-    Netid,
+    Info,
     State(StateArgs),
     Raw(RawAction),
     Var(VarArgs),
@@ -106,10 +106,6 @@ enum LicenseAction {
     /// Get the volume number
     Volumeno,
 }
-
-#[derive(StructOpt, Debug)]
-/// Query NetID of the remote router.
-struct NetIdArgs {}
 
 #[derive(StructOpt, Debug)]
 /// Read or write the ADS state of the device.
@@ -281,9 +277,15 @@ fn main_inner(args: Args) -> Result<(), Error> {
                                 subargs.temporary)?;
             println!("Success.");
         }
-        Cmd::Netid => {
-            let netid = ads::udp::get_netid(udp_addr)?;
-            println!("{}", netid);
+        Cmd::Info => {
+            let info = ads::udp::get_info(udp_addr)?;
+            println!("NetID: {}", info.netid);
+            println!("Hostname: {}", info.hostname);
+            println!("TwinCAT version: {}.{}.{}",
+                     info.twincat_version.0, info.twincat_version.1, info.twincat_version.2);
+            println!("OS version: {} {}.{}.{} {}",
+                     info.os_version.0, info.os_version.1, info.os_version.2,
+                     info.os_version.3, info.os_version.4);
         }
         Cmd::File(subargs) => {
             use ads::file;

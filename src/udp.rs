@@ -1,5 +1,6 @@
 //! Implements the Beckhoff UDP message protocol for basic operations.
 
+use std::convert::TryInto;
 use std::io::Write;
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::str;
@@ -32,12 +33,14 @@ pub enum ServiceId {
 pub enum Tag {
     Status = 1,
     Password = 2,
-    Version = 3,
+    TCVersion = 3,
+    OSVersion = 4,
     ComputerName = 5,
     NetID = 7,
     Options = 9,
     RouteName = 12,
     UserName = 13,
+    // ? = 18  sent in reply to Identify, could be an SHA-256
 }
 
 impl UdpMessage {
@@ -159,7 +162,7 @@ impl UdpMessage {
     }
 }
 
-/// Helper to construct and send an UDP message for setting a route.
+/// Send a UDP message for setting a route.
 ///
 /// - `target`: (host, port) of the AMS router to add the route to
 ///   (the port should normally be `ads::ADS_UDP_PORT`)
@@ -188,14 +191,60 @@ pub fn add_route(target: (&str, u16), netid: AmsNetId, host: &str,
     match reply.get_u32(Tag::Status) {
         None => Err(Error::Udp("got no status in route reply")),
         Some(0) => Ok(()),
-        Some(_) => Err(Error::Udp("got error status from route request")),
+        Some(n) => crate::errors::ads_error(n),
     }
 }
 
-/// Helper to send an UDP message for querying the remote NetID.
+pub struct SysInfo {
+    pub netid: AmsNetId,
+    pub hostname: String,
+    pub twincat_version: (u8, u8, u16),
+    pub os_version: (&'static str, u32, u32, u32, String),
+}
+
+/// Send a UDP message for querying remote system NetID.
 pub fn get_netid(target: (&str, u16)) -> Result<AmsNetId> {
-            // TODO: decode info further?
     let packet = UdpMessage::new(ServiceId::Identify, AmsAddr::default());
     let reply = packet.send_receive(target)?;
     Ok(reply.get_source().netid())
+}
+
+/// Send a UDP message for querying remote system information.
+pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
+    let packet = UdpMessage::new(ServiceId::Identify, AmsAddr::default());
+    let reply = packet.send_receive(target)?;
+    let tcver = reply.get_bytes(Tag::TCVersion).unwrap_or(&[0, 0, 0, 0]);
+    let twincat_version = (tcver[0], tcver[1], u16::from_le_bytes(tcver[2..4].try_into().unwrap()));
+    let os_version = if let Some(mut bytes) = reply.get_bytes(Tag::OSVersion) {
+        if bytes.len() >= 22 {
+            let _ = bytes.read_u32::<LE>().unwrap();
+            let major = bytes.read_u32::<LE>().unwrap();
+            let minor = bytes.read_u32::<LE>().unwrap();
+            let build = bytes.read_u32::<LE>().unwrap();
+            let platform = match bytes.read_u32::<LE>().unwrap() {
+                1 => "Windows 9x",
+                2 => "Windows NT",
+                3 => "Windows CE",
+                _ => "Unknown platform",
+            };
+            let mut string = String::new();
+            while let Ok(ch) = bytes.read_u16::<LE>() {
+                string.push(std::char::from_u32(ch as u32).unwrap());
+                if ch == 0 {
+                    break;
+                }
+            }
+            (platform, major, minor, build, string)
+        } else {
+            ("Unknown OS info format", 0, 0, 0, "".into())
+        }
+    } else {
+        ("No OS info", 0, 0, 0, "".into())
+    };
+    Ok(SysInfo {
+        netid: reply.get_source().netid(),
+        hostname: reply.get_str(Tag::ComputerName).unwrap_or("unknown").into(),
+        twincat_version,
+        os_version,
+    })
 }
