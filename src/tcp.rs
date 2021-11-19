@@ -18,6 +18,7 @@ use crate::{AmsAddr, AmsNetId, Error, Result};
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
 #[repr(u16)]
+#[derive(Clone, Copy, Debug)]
 pub enum Command {
     /// Return device info
     DevInfo = 1,
@@ -44,7 +45,7 @@ pub enum Command {
 /// Size of the AMS/TCP + ADS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
 const HEADER_SIZE: usize = 38;
-const REPLY_HEADER_SIZE: usize = HEADER_SIZE + 4;  // with result field
+const AMS_HEADER_SIZE: usize = HEADER_SIZE - 6;  // without leading nulls and length
 const DEFAULT_BUFFER_SIZE: usize = 100;
 
 #[derive(Clone, Copy, Debug)]
@@ -93,6 +94,21 @@ impl Drop for Client {
 
 impl Client {
     /// Open a new connection to an ADS server.
+    ///
+    /// If connecting to a server that has an AMS router, it needs to have a
+    /// route set for the source IP and NetID, otherwise the connection will be
+    /// closed immediately.  The route can be added from TwinCAT, or this
+    /// crate's `udp::add_route` helper can be used to add a route via UDP
+    /// message.
+    ///
+    /// `source` is the AMS address to to use as the source; the NetID needs to
+    /// match the route entry in the server.  If None, the NetID is constructed
+    /// from the local IP address with .1.1 appended; if there is no IPv4
+    /// address, `127.0.0.1.1.1` is used.
+    ///
+    /// The AMS port of `source` is not important, as long as it is not a
+    /// well-known service port; an ephemeral port number > 49152 is
+    /// recommended.  If None, the port is set to 58913.
     pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Option<AmsAddr>) -> Result<Self> {
         let addr = addr.to_socket_addrs()?.next().unwrap();
         let socket = if let Some(timeout) = timeouts.connect {
@@ -108,9 +124,10 @@ impl Client {
                 let my_addr = socket.local_addr()?.ip();
                 if let IpAddr::V4(ip) = my_addr {
                     let [a, b, c, d] = ip.octets();
-                    AmsAddr::new(AmsNetId::new(a, b, c, d, 1, 1), 0)
+                    // use some random ephemeral port
+                    AmsAddr::new(AmsNetId::new(a, b, c, d, 1, 1), 58913)
                 } else {
-                    AmsAddr::new(AmsNetId::new(127, 0, 0, 1, 1, 1), 0)
+                    AmsAddr::new(AmsNetId::new(127, 0, 0, 1, 1, 1), 58913)
                 }
             }
         };
@@ -166,7 +183,7 @@ impl Client {
 
         // Fill the outgoing header.
         // first two bytes are always 0
-        let rest_len = (HEADER_SIZE + data_in_len - 6).try_into()?;
+        let rest_len = (AMS_HEADER_SIZE + data_in_len).try_into()?;
         request.write_u16::<LE>(0)?;                   // initial padding
         request.write_u32::<LE>(rest_len)?;            // length of rest of message
         target.write_to(&mut request)?;                // dest netid+port
@@ -192,45 +209,48 @@ impl Client {
             self.reply_recv.recv().unwrap()
         };
 
-        // Validation of the incoming reply.
+        // Validate the incoming reply.  The reader thread already made sure that
+        // it is consistent and addressed to us.
 
-        // pure data length, without result field
-        let data_len = LE::read_u32(&reply[2..6]) as usize + 6 - REPLY_HEADER_SIZE;
+        // Get the pure data length, without result field.
+        let data_len = LE::read_u32(&reply[2..6]) as usize - AMS_HEADER_SIZE + 4;
 
-        // target netid/port must match what we sent
-        if reply[6..14] != request[14..22] {
-            return Err(Error::Communication("unexpected return address", 0));
-        }
+        // The source netid/port must match what we sent.
         if reply[14..22] != request[6..14] {
             return Err(Error::Communication("unexpected originating address", 0));
         }
-        // validate other fields
-        let mut ptr = &reply[24..];
+        // Read the other fields we need.
+        let mut ptr = &reply[22..];
+        let ret_cmd = ptr.read_u16::<LE>()?;
         let state_flags = ptr.read_u16::<LE>()?;
         let _len = ptr.read_u32::<LE>()?;  // includes result field
         let error_code = ptr.read_u32::<LE>()?;
         let invoke_id = ptr.read_u32::<LE>()?;
         let result = ptr.read_u32::<LE>()?;
 
-        // state flags must be "4 | 1"
+        // Command must match.
+        if ret_cmd != cmd as u16 {
+            return Err(Error::Communication("unexpected command", ret_cmd as u32));
+        }
+        // State flags must be "4 | 1".
         if state_flags != 5 {
             return Err(Error::Communication("unexpected state flags", state_flags as u32));
         }
-        // invoke ID must match what we sent
+        // Invoke ID must match what we sent.
         if invoke_id != self.invoke_id.get() {
             return Err(Error::Communication("unexpected invoke ID", invoke_id));
         }
-        // error code in AMS header
+        // Check error code in AMS header.
         if error_code != 0 {
             return ads_error(error_code);
         }
-        // result field in payload, only relevant if error_code == 0
+        // Check result field in payload, only relevant if error_code == 0.
         if result != 0 {
             return ads_error(result);
         }
 
         // Distribute the data into the user output buffers.
-        let mut offset = REPLY_HEADER_SIZE;
+        let mut offset = HEADER_SIZE + 4;
         let mut rest_len = data_len;
         for buf in data_out {
             let n = buf.len().min(rest_len);
@@ -279,20 +299,32 @@ impl Reader {
                                        .unwrap_or_else(|_| Vec::with_capacity(DEFAULT_BUFFER_SIZE));
             buf.resize(HEADER_SIZE, 0);
 
-            // Read a message from the socket.
+            // Read a header from the socket.
             self.socket.read_exact(&mut buf)?;
+
+            // If the header isn't self-consistent, abort the connection.
+            let packet_length = LE::read_u32(&buf[2..6]) as usize;
             let rest_length = LE::read_u32(&buf[26..30]) as usize;
+
+            // First two bytes must be zero, and the two length fields must agree.
+            if buf[..2] != [0, 0] || rest_length != packet_length - AMS_HEADER_SIZE {
+                self.socket.shutdown(Shutdown::Both)?;
+                return Ok(());
+            }
+
+            // Read the rest of the message.
             buf.resize(HEADER_SIZE + rest_length, 0);
             self.socket.read_exact(&mut buf[HEADER_SIZE..])?;
 
-            // If it's a reply, send it back to the requesting thread.
-            if LE::read_u16(&buf[22..24]) != Command::Notification as u16 {
-                self.reply_send.send(buf).unwrap();
+            // Check that the packet is meant for us.
+            if buf[6..14] != self.source {
                 continue;
             }
 
-            // Check that the notification is meant for us.
-            if buf[6..14] != self.source {
+            // If it looks like a reply, send it back to the requesting thread,
+            // it will handle further validation.
+            if LE::read_u16(&buf[22..24]) != Command::Notification as u16 {
+                self.reply_send.send(buf).unwrap();
                 continue;
             }
 

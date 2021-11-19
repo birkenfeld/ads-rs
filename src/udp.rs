@@ -6,7 +6,7 @@ use std::str;
 
 use byteorder::{LE, ReadBytesExt, WriteBytesExt, ByteOrder};
 
-use crate::{AmsAddr, Error, Result};
+use crate::{AmsAddr, AmsNetId, Error, Result};
 
 /// Magic number for the first four bytes of each UDP packet.
 pub const BECKHOFF_UDP_MAGIC: u32 = 0x_71_14_66_03;
@@ -157,4 +157,45 @@ impl UdpMessage {
         // Parse the reply.
         Self::parse_reply(&reply[..n], self.service)
     }
+}
+
+/// Helper to construct and send an UDP message for setting a route.
+///
+/// - `target`: (host, port) of the AMS router to add the route to
+///   (the port should normally be `ads::ADS_UDP_PORT`)
+/// - `netid`: the NetID of the route's target
+/// - `host`: the IP address or hostname of the route's target (when using
+///   hostnames instead of IP addresses, beware of Windows hostname resolution)
+/// - `routename`: name of the route, default is `host`
+/// - `username`: system username for the router, default is `Administrator`
+/// - `password`: system password for the given user, default is `1`
+/// - `temporary`: marks the route as "temporary"
+pub fn add_route(target: (&str, u16), netid: AmsNetId, host: &str,
+                 routename: Option<&str>, username: Option<&str>,
+                 password: Option<&str>, temporary: bool) -> Result<()> {
+    let mut packet = UdpMessage::new(ServiceId::AddRoute, AmsAddr::new(netid, 0));
+    packet.add_bytes(Tag::NetID, &netid.0);
+    packet.add_str(Tag::ComputerName, host);
+    packet.add_str(Tag::UserName, username.unwrap_or("Administrator"));
+    packet.add_str(Tag::Password, password.unwrap_or("1"));
+    packet.add_str(Tag::RouteName, routename.unwrap_or(host));
+    if temporary {
+        packet.add_u32(Tag::Options, 1);
+    }
+
+    let reply = packet.send_receive(target)?;
+
+    match reply.get_u32(Tag::Status) {
+        None => Err(Error::Udp("got no status in route reply")),
+        Some(0) => Ok(()),
+        Some(_) => Err(Error::Udp("got error status from route request")),
+    }
+}
+
+/// Helper to send an UDP message for querying the remote NetID.
+pub fn get_netid(target: (&str, u16)) -> Result<AmsNetId> {
+            // TODO: decode info further?
+    let packet = UdpMessage::new(ServiceId::Identify, AmsAddr::default());
+    let reply = packet.send_receive(target)?;
+    Ok(reply.get_source().netid())
 }

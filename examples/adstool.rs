@@ -155,10 +155,10 @@ enum RawAction {
         index_offset: u32,
         /// the length to read, can be 0xABCD
         #[structopt(long, parse(try_from_str = parse), group = "spec")]
-        read_length: Option<usize>,
+        length: Option<usize>,
         /// the data type to interpret the read data as
         #[structopt(long, group = "spec")]
-        read_type: Option<VarType>,
+        r#type: Option<VarType>,
         /// whether to print integers as hex
         #[structopt(long)]
         hex: bool
@@ -265,28 +265,15 @@ fn main_inner(args: Args) -> Result<(), Error> {
     let udp_addr = (target.host.as_str(), target.port.unwrap_or(ads::ADS_UDP_PORT));
     match args.cmd {
         Cmd::Addroute(subargs) => {
-            let mut packet = ads::UdpMessage::new(ads::udp::ServiceId::AddRoute,
-                                                  ads::AmsAddr::new(subargs.netid, 0));
-            packet.add_bytes(ads::udp::Tag::NetID, &subargs.netid.0);
-            packet.add_str(ads::udp::Tag::ComputerName, &subargs.addr);
-            packet.add_str(ads::udp::Tag::UserName, &subargs.username);
-            packet.add_str(ads::udp::Tag::Password, &subargs.password);
-            packet.add_str(ads::udp::Tag::RouteName,
-                           subargs.routename.as_ref().unwrap_or(&subargs.addr));
-            if subargs.temporary {
-                packet.add_u32(ads::udp::Tag::Options, 1);
-            }
-
-            let reply = packet.send_receive(udp_addr)?;
-
-            println!("Return status: {}", reply.get_u32(ads::udp::Tag::Status).unwrap());
+            ads::udp::add_route(udp_addr, subargs.netid, &subargs.addr,
+                                subargs.routename.as_deref(),
+                                Some(&subargs.username), Some(&subargs.password),
+                                subargs.temporary)?;
+            println!("Success.");
         }
         Cmd::Netid => {
-            let packet = ads::UdpMessage::new(ads::udp::ServiceId::Identify,
-                                              ads::AmsAddr::default());
-            let reply = packet.send_receive(udp_addr)?;
-            println!("{}", reply.get_source());
-            // TODO: decode info further?
+            let netid = ads::udp::get_netid(udp_addr)?;
+            println!("{}", netid);
         }
         Cmd::File(subargs) => {
             use ads::file;
@@ -318,6 +305,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let amsaddr = ads::AmsAddr::new(netid, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
+            let info = dev.get_info()?;
+            println!("Device: {} {}.{}.{}", info.name, info.major, info.minor, info.version);
             let (state, dev_state) = dev.get_state()?;
             println!("Current state: {:?}", state);
             if let Some(newstate) = subargs.target_state {
@@ -375,14 +364,14 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     stdin().read_to_end(&mut write_data)?;
                     dev.write(index_group, index_offset, &write_data)?;
                 }
-                RawAction::WriteRead { index_group, index_offset, read_length, read_type, hex } => {
+                RawAction::WriteRead { index_group, index_offset, length, r#type, hex } => {
                     let mut write_data = Vec::new();
                     stdin().read_to_end(&mut write_data)?;
-                    if let Some(length) = read_length {
+                    if let Some(length) = length {
                         let mut read_data = vec![0; length];
                         dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
                         stdout().write_all(&read_data)?;
-                    } else if let Some(typ) = read_type {
+                    } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
                         dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
                         print_read_value(typ, &read_data, hex);
