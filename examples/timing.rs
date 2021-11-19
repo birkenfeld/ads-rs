@@ -8,10 +8,9 @@ fn main_dumb() {
     let now = std::time::Instant::now();
     for _ in 0..5000 {
         let mut buf = [0; 50];
-        sock.write_all(b"\x00\x00(\x00\x00\x00\x7f\x00\x00\x01\x01\x01\x00\x00\
-                         \x01\x02\x03\x04\x05\x06S\x03\x02\x00\x05\x00\x0c\x00\
-                         \x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\
-                         \x00\x04\x00\x00\x00\xa4\xe0\xfbD").unwrap();
+        sock.write_all(b"\
+            \0\0(\0\0\0\x7f\0\0\x01\x01\x01\0\0\x01\x02\x03\x04\x05\x06S\x03\x02\0\
+            \x05\0\x0c\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\x04\0\0\0\xa4\xe0\xfbD").unwrap();
         sock.read_exact(&mut buf).unwrap();
     }
     println!("dumb:   {:?}", now.elapsed());

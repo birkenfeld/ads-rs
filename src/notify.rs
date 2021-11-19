@@ -11,13 +11,18 @@ pub type Handle = u32;
 
 /// Attributes for creating a notification.
 pub struct Attributes {
+    /// Length of data the notification is interested in.
     pub length: usize,
+    /// When notification messages should be transmitted.
     pub trans_mode: TransmissionMode,
+    /// The maximum delay between change and transmission.
     pub max_delay: Duration,
+    /// The cycle time for checking for changes.
     pub cycle_time: Duration,
 }
 
 impl Attributes {
+    /// Return new notification attributes.
     pub fn new(length: usize, trans_mode: TransmissionMode,
                max_delay: Duration, cycle_time: Duration) -> Self {
         Self { length, trans_mode, max_delay, cycle_time }
@@ -59,7 +64,7 @@ impl std::fmt::Debug for Notification {
 }
 
 impl Notification {
-    pub fn new(data: Vec<u8>) -> Result<Self> {
+    pub(crate) fn new(data: Vec<u8>) -> Result<Self> {
         // Relevant data starts at byte 42 with the number of stamps.
         let mut ptr = &data[42..];
         let nstamps = ptr.read_u32::<LE>()?;
@@ -85,7 +90,8 @@ impl Notification {
         }
     }
 
-    pub fn samples(&self) -> SampleIter {
+    /// Return an iterator over all data samples in this notification.
+    pub fn samples(&self) -> SampleIter<'_> {
         SampleIter { data: &self.data[46..], cur_timestamp: 0,
                      stamps_left: self.nstamps, samples_left: 0 }
     }

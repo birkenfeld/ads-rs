@@ -1,6 +1,8 @@
 //! Well known ADS ports as defined
 //! [here](https://infosys.beckhoff.com/content/1033/tc3_ads_intro/116159883.html?id=6824734840428332798).
 
+#![allow(missing_docs)]
+
 use crate::AmsPort;
 
 pub const AMS_ROUTER: AmsPort = 1;

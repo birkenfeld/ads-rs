@@ -1,8 +1,11 @@
 //! Defines ADS error types.
 
+/// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// A collection of different errors that can happen with ADS requests.
 #[derive(Debug, thiserror::Error)]
+#[allow(missing_docs)]
 pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -20,7 +23,8 @@ pub enum Error {
     Udp(&'static str),
 }
 
-// https://infosys.beckhoff.com/content/1033/tc3_ads_intro_howto/374277003.html?id=2736996179007627436
+/// The list of known ADS error codes from
+/// [here](https://infosys.beckhoff.com/content/1033/tc3_ads_intro_howto/374277003.html?id=2736996179007627436).
 pub const ADS_ERRORS: &[(u32, &str)] = &[
     (0x001, "Internal error"),
     (0x002, "No real-time"),

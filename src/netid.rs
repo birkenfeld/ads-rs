@@ -83,20 +83,19 @@ impl Display for AmsNetId {
 pub struct AmsAddr(AmsNetId, AmsPort);
 
 impl AmsAddr {
+    /// Create a new address from NetID and port.
     pub fn new(netid: AmsNetId, port: AmsPort) -> Self {
         Self(netid, port)
     }
 
+    /// Return the NetID of this address.
     pub fn netid(&self) -> AmsNetId {
         self.0
     }
 
+    /// Return the port of this address.
     pub fn port(&self) -> AmsPort {
         self.1
-    }
-
-    pub fn set_port(&mut self, port: AmsPort) {
-        self.1 = port;
     }
 
     /// Write the NetID to a stream.

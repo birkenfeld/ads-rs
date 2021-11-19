@@ -440,7 +440,7 @@ fn get_write_value(typ: VarType, value: String) -> Result<Vec<u8>, Error> {
 fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
     let value = match typ {
         VarType::String => {
-            println!("{}", String::from_utf8_lossy(buf).split('\x00').next().unwrap());
+            println!("{}", String::from_utf8_lossy(buf).split('\0').next().unwrap());
             return;
         }
         VarType::Bool => {

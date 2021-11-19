@@ -48,33 +48,52 @@ const HEADER_SIZE: usize = 38;
 const AMS_HEADER_SIZE: usize = HEADER_SIZE - 6;  // without leading nulls and length
 const DEFAULT_BUFFER_SIZE: usize = 100;
 
+/// Holds the different timeouts that will be used by the Client.
+/// None means no timeout in every case.
 #[derive(Clone, Copy, Debug)]
 pub struct Timeouts {
-    connect: Option<Duration>,
-    read: Option<Duration>,
-    write: Option<Duration>,
+    /// Connect timeout
+    pub connect: Option<Duration>,
+    /// Reply read timeout
+    pub read: Option<Duration>,
+    /// Socket write timoeut
+    pub write: Option<Duration>,
 }
 
 impl Timeouts {
+    /// Create a new `Timeouts` where all values are identical.
     pub fn new(duration: Duration) -> Self {
         Self { connect: Some(duration), read: Some(duration), write: Some(duration) }
     }
 
+    /// Create a new `Timeouts` without any timeouts specified.
     pub fn none() -> Self {
         Self { connect: None, read: None, write: None }
     }
 }
 
 /// Represents a connection to a ADS server.
+///
+/// The Client's communication methods use `&self`, so that it can be freely
+/// shared within one thread, and different calls will be made from the
+/// different wrappers, such as `Device` or `symbol::Handle`.
 pub struct Client {
-    invoke_id: Cell<u32>,
+    /// TCP connection (duplicated with the reader)
     socket: TcpStream,
+    /// Current invoke ID (identifies the request/reply pair), incremented
+    /// after each request
+    invoke_id: Cell<u32>,
+    /// Read timeout (actually receive timeout for the channel)
     read_timeout: Option<Duration>,
+    /// The AMS address of the client
     source: AmsAddr,
+    /// Sender for used Vec buffers to the reader thread
     buf_send: Sender<Vec<u8>>,
+    /// Receiver for synchronous replies: used in `communicate`
     reply_recv: Receiver<Vec<u8>>,
+    /// Receiver for notifications: cloned and given out to interested parties
     notif_recv: Receiver<notify::Notification>,
-    /// active notification handles
+    /// Active notification handles: these will be closed on Drop
     notif_handles: RefCell<BTreeSet<(AmsAddr, notify::Handle)>>,
 }
 
@@ -168,7 +187,7 @@ impl Client {
     }
 
     /// Return a wrapper that executes operations for a target device (known by
-    /// Net-ID and port).
+    /// NetID and port).
     pub fn device(&self, addr: AmsAddr) -> Device<'_> {
         Device { client: self, addr }
     }
@@ -465,14 +484,19 @@ impl<'c> Device<'c> {
 /// Device info returned from an ADS server.
 #[derive(Debug)]
 pub struct DeviceInfo {
+    /// Name of the ADS device/service.
     pub name: String,
+    /// Major version.
     pub major: u8,
+    /// Minor version.
     pub minor: u8,
+    /// Build version.
     pub version: u16,
 }
 
 /// The ADS state of a device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(missing_docs)]
 #[repr(u16)]
 pub enum AdsState {
     Invalid   = 0,

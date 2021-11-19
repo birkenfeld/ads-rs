@@ -7,6 +7,19 @@
 //!
 //! The [specification](https://infosys.beckhoff.de/content/1031/tc3_adscommon/html/tcadscommon_introads.htm)
 //! can be found on their Information System pages.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! // Open the connection to a PLC.
+//! let timeouts = ads::Timeouts::new(std::time::Duration::from_secs(1));
+//! let client = ads::Client::new("myplc:48898", timeouts, None)?;
+//!
+//! // Get a handle for a symbol and read data from it.
+//! let handle = client.device
+//! ```
+
+#![deny(missing_docs)]
 
 pub mod netid;
 pub mod tcp;
@@ -17,6 +30,10 @@ pub mod ports;
 pub mod index;
 pub mod file;
 pub mod symbol;
+#[cfg(test)]
+mod testing;
+#[cfg(test)]
+mod test_tcp;
 
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
 pub use tcp::{Client, Device, Timeouts};

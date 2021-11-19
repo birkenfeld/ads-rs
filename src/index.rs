@@ -1,5 +1,9 @@
 //! Well-known index groups as defined
-//! [here](https://infosys.beckhoff.com/content/1033/tc3_ads_intro/117241867.html?id=1944752650545554679).
+//! [here](https://infosys.beckhoff.com/content/1033/tc3_ads_intro/117241867.html?id=1944752650545554679)
+//! and [here](https://github.com/Beckhoff/ADS/blob/master/AdsLib/standalone/AdsDef.h).
+
+// Unfortunately, not all those constants are documented.
+#![allow(missing_docs)]
 
 /// PLC: Read/write PLC memory (%M fields).
 pub const PLC_RW_M: u32 = 0x4020;

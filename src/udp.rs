@@ -20,16 +20,19 @@ pub struct UdpMessage {
 }
 
 /// The operation that the PLC should execute.
-#[repr(u32)]
 #[derive(Debug, Clone, Copy)]
+#[repr(u32)]
 pub enum ServiceId {
+    /// Identify the PLC, TwinCAT and OS versions.
     Identify = 1,
+    /// Add a routing entry to the router.
     AddRoute = 6,
 }
 
 /// Identifies a piece of information in the UDP message.
-#[repr(u16)]
 #[derive(Debug, Clone, Copy)]
+#[allow(missing_docs)]
+#[repr(u16)]
 pub enum Tag {
     Status = 1,
     Password = 2,
@@ -195,18 +198,23 @@ pub fn add_route(target: (&str, u16), netid: AmsNetId, host: &str,
     }
 }
 
-pub struct SysInfo {
-    pub netid: AmsNetId,
-    pub hostname: String,
-    pub twincat_version: (u8, u8, u16),
-    pub os_version: (&'static str, u32, u32, u32, String),
-}
-
 /// Send a UDP message for querying remote system NetID.
 pub fn get_netid(target: (&str, u16)) -> Result<AmsNetId> {
     let packet = UdpMessage::new(ServiceId::Identify, AmsAddr::default());
     let reply = packet.send_receive(target)?;
     Ok(reply.get_source().netid())
+}
+
+/// Information about the system running TwinCAT.
+pub struct SysInfo {
+    /// AMS NetID of the system.
+    pub netid: AmsNetId,
+    /// Hostname of the system.
+    pub hostname: String,
+    /// The TwinCAT (major, minor, build) version.
+    pub twincat_version: (u8, u8, u16),
+    /// The OS (name, major, minor, build, service_pack) version.
+    pub os_version: (&'static str, u32, u32, u32, String),
 }
 
 /// Send a UDP message for querying remote system information.
