@@ -5,22 +5,34 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// A collection of different errors that can happen with ADS requests.
 #[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    /// An IO error occurred.
+    #[error("{0}: {1}")]
+    Io(&'static str, std::io::Error),
 
-    #[error("{0} ({1})")]
-    Communication(&'static str, u32),
+    /// The ADS server responded with an error code.
+    #[error("{0}: {1} ({2})")]
+    Ads(&'static str, &'static str, u32),
 
-    #[error("{0} ({1})")]
-    Ads(&'static str, u32),
+    /// An unexpected or inconsistent reply was received.
+    #[error("{0}: {1} ({2})")]
+    Reply(&'static str, &'static str, u32),
 
-    #[error("data length exceeds 32 bits")]
-    Length(#[from] std::num::TryFromIntError),
+    /// A value exceeds the allowed 32 bits for ADS.
+    #[error("data length or duration exceeds 32 bits")]
+    Overflow(#[from] std::num::TryFromIntError),
+}
 
-    #[error("UDP: {0}")]
-    Udp(&'static str),
+pub(crate) trait ErrContext {
+    type Success;
+    fn ctx(self, context: &'static str) -> Result<Self::Success>;
+}
+
+impl<T> ErrContext for std::result::Result<T, std::io::Error> {
+    type Success = T;
+    fn ctx(self, context: &'static str) -> Result<Self::Success> {
+        self.map_err(|e| Error::Io(context, e))
+    }
 }
 
 /// The list of known ADS error codes from
@@ -167,9 +179,9 @@ pub const ADS_ERRORS: &[(u32, &str)] = &[
 ];
 
 /// Return an `Error` corresponding to the given ADS result code.
-pub fn ads_error<T>(err: u32) -> Result<T> {
+pub fn ads_error<T>(action: &'static str, err: u32) -> Result<T> {
     match ADS_ERRORS.binary_search_by_key(&err, |e| e.0) {
-        Ok(idx) => Err(Error::Ads(ADS_ERRORS[idx].1, err)),
-        Err(_) => Err(Error::Ads("Unknown error code", err))
+        Ok(idx) => Err(Error::Ads(action, ADS_ERRORS[idx].1, err)),
+        Err(_) => Err(Error::Ads(action, "Unknown error code", err))
     }
 }

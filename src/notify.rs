@@ -1,10 +1,12 @@
 //! Everything to do with ADS notifications.
 
+use std::io;
 use std::time::Duration;
 
 use byteorder::{LE, ReadBytesExt};
 
 use crate::{Error, Result};
+use crate::errors::ErrContext;
 
 /// A handle to the notification; this can be used to delete the notification later.
 pub type Handle = u32;
@@ -67,26 +69,29 @@ impl Notification {
     pub(crate) fn new(data: Vec<u8>) -> Result<Self> {
         // Relevant data starts at byte 42 with the number of stamps.
         let mut ptr = &data[42..];
-        let nstamps = ptr.read_u32::<LE>()?;
+        let nstamps = ptr.read_u32::<LE>().ctx("parsing notification")?;
         for _ in 0..nstamps {
-            let _timestamp = ptr.read_u64::<LE>()?;
-            let nsamples = ptr.read_u32::<LE>()?;
+            let _timestamp = ptr.read_u64::<LE>().ctx("parsing notification")?;
+            let nsamples = ptr.read_u32::<LE>().ctx("parsing notification")?;
 
             for _ in 0..nsamples {
-                let _handle = ptr.read_u32::<LE>()?;
-                let length = ptr.read_u32::<LE>()? as usize;
+                let _handle = ptr.read_u32::<LE>().ctx("parsing notification")?;
+                let length = ptr.read_u32::<LE>().ctx("parsing notification")? as usize;
                 if ptr.len() >= length {
                     ptr = &ptr[length..];
                 } else {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof, "notification too short")));
+                    return Err(Error::Io("parsing notification",
+                                         io::Error::new(io::ErrorKind::UnexpectedEof,
+                                                        "unexpected end of buffer")));
                 }
             }
         }
         if ptr.is_empty() {
             Ok(Self { data, nstamps })
         } else {
-            Err(Error::Communication("too many bytes in notification", ptr.len() as u32))
+            Err(Error::Io("parsing notification",
+                          io::Error::new(io::ErrorKind::UnexpectedEof,
+                                         "too many bytes in notification")))
         }
     }
 
@@ -121,18 +126,21 @@ impl<'a> Iterator for SampleIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.samples_left > 0 {
-            let handle = self.data.read_u32::<LE>().unwrap();
-            let length = self.data.read_u32::<LE>().unwrap() as usize;
+            // Read more samples from the current stamp.
+            let handle = self.data.read_u32::<LE>().expect("size");
+            let length = self.data.read_u32::<LE>().expect("size") as usize;
             let (data, rest) = self.data.split_at(length);
             self.data = rest;
             self.samples_left -= 1;
             Some(Sample { handle, data, timestamp: self.cur_timestamp })
         } else if self.stamps_left > 0 {
-            self.cur_timestamp = self.data.read_u64::<LE>().unwrap();
-            self.samples_left = self.data.read_u32::<LE>().unwrap();
+            // Go to next stamp.
+            self.cur_timestamp = self.data.read_u64::<LE>().expect("size");
+            self.samples_left = self.data.read_u32::<LE>().expect("size");
             self.stamps_left -= 1;
             self.next()
         } else {
+            // Nothing else here.
             None
         }
     }

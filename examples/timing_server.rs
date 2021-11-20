@@ -1,5 +1,5 @@
-use std::net::*;
-use std::io::*;
+use std::net::TcpListener;
+use std::io::{Read, Write};
 
 fn main() {
     let srv = TcpListener::bind("127.0.0.1:48999").unwrap();

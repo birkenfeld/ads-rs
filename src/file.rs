@@ -34,8 +34,9 @@ impl<'c> File<'c> {
 impl<'a> io::Write for File<'a> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         self.device.write_read(index::FILE_WRITE, self.handle, data, &mut [])
+                   // need to convert errors back to io::Error
                    .map_err(|e| match e {
-                       Error::Io(ioe) => ioe,
+                       Error::Io(_, io_error) => io_error,
                        _ => io::Error::new(io::ErrorKind::Other, e.to_string())
                    })
                    // no info about written length is returned
@@ -51,7 +52,7 @@ impl<'a> std::io::Read for File<'a> {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
         self.device.write_read(index::FILE_READ, self.handle, &[], data)
                    .map_err(|e| match e {
-                       Error::Io(ioe) => ioe,
+                       Error::Io(_, io_error) => io_error,
                        _ => io::Error::new(io::ErrorKind::Other, e.to_string())
                    })
     }

@@ -223,19 +223,20 @@ struct Target {
     amsport: Option<ads::AmsPort>
 }
 
+const RX: &str = "(?P<host>[^:/]+)(:(?P<port>\\d+))?(/(?P<netid>[0-9.]+)(:(?P<amsport>\\d+))?)?$";
+
 impl FromStr for Target {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let rx = regex::Regex::new("(?P<host>[^:/]+)(:(?P<port>\\d+))?\
-                                    (/(?P<netid>[0-9.]+)(:(?P<amsport>\\d+))?)?$").unwrap();
+        let rx = regex::Regex::new(RX).expect("valid regex");
         match rx.captures(s) {
             None => Err("target format is host[:port][/netid[:amsport]]"),
             Some(cap) => Ok(Target {
                 host: cap["host"].into(),
-                port: cap.name("port").map(|p| p.as_str().parse().unwrap()),
+                port: cap.name("port").map(|p| p.as_str().parse().expect("from rx")),
                 netid: cap.name("netid").map(|p| p.as_str().parse()).transpose()?,
-                amsport: cap.name("amsport").map(|p| p.as_str().parse().unwrap()),
+                amsport: cap.name("amsport").map(|p| p.as_str().parse().expect("from rx")),
             })
         }
     }
@@ -263,11 +264,11 @@ enum Error {
 
 fn main_inner(args: Args) -> Result<(), Error> {
     let target = args.target;
-    let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::ADS_PORT));
-    let udp_addr = (target.host.as_str(), target.port.unwrap_or(ads::ADS_UDP_PORT));
+    let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::PORT));
+    let udp_addr = (target.host.as_str(), target.port.unwrap_or(ads::UDP_PORT));
     let get_netid = || match target.netid {
         Some(netid) => Ok(netid),
-        None => ads::udp::get_netid((target.host.as_str(), ads::ADS_UDP_PORT)),
+        None => ads::udp::get_netid((target.host.as_str(), ads::UDP_PORT)),
     };
     match args.cmd {
         Cmd::Addroute(subargs) => {
@@ -440,7 +441,7 @@ fn get_write_value(typ: VarType, value: String) -> Result<Vec<u8>, Error> {
 fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
     let value = match typ {
         VarType::String => {
-            println!("{}", String::from_utf8_lossy(buf).split('\0').next().unwrap());
+            println!("{}", String::from_utf8_lossy(buf).split('\0').next().expect("item"));
             return;
         }
         VarType::Bool => {
@@ -452,23 +453,23 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
             return;
         }
         VarType::Real  => {
-            let v = f32::from_le_bytes(buf[..4].try_into().unwrap());
+            let v = f32::from_le_bytes(buf[..4].try_into().expect("size"));
             println!("{}", v);
             return;
         }
         VarType::Lreal => {
-            let v = i64::from_le_bytes(buf[..8].try_into().unwrap());
+            let v = i64::from_le_bytes(buf[..8].try_into().expect("size"));
             println!("{}", v);
             return;
         }
         VarType::Byte  => buf[0] as i128,
         VarType::Sint  => buf[0] as i8 as i128,
-        VarType::Word  => u16::from_le_bytes(buf[..2].try_into().unwrap()) as i128,
-        VarType::Int   => i16::from_le_bytes(buf[..2].try_into().unwrap()) as i128,
-        VarType::Dword => u32::from_le_bytes(buf[..4].try_into().unwrap()) as i128,
-        VarType::Dint  => i32::from_le_bytes(buf[..4].try_into().unwrap()) as i128,
-        VarType::Lword => u64::from_le_bytes(buf[..8].try_into().unwrap()) as i128,
-        VarType::Lint  => i64::from_le_bytes(buf[..8].try_into().unwrap()) as i128,
+        VarType::Word  => u16::from_le_bytes(buf[..2].try_into().expect("size")) as i128,
+        VarType::Int   => i16::from_le_bytes(buf[..2].try_into().expect("size")) as i128,
+        VarType::Dword => u32::from_le_bytes(buf[..4].try_into().expect("size")) as i128,
+        VarType::Dint  => i32::from_le_bytes(buf[..4].try_into().expect("size")) as i128,
+        VarType::Lword => u64::from_le_bytes(buf[..8].try_into().expect("size")) as i128,
+        VarType::Lint  => i64::from_le_bytes(buf[..8].try_into().expect("size")) as i128,
     };
     // Only reaches here for integer types
     if hex {

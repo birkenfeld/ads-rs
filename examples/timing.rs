@@ -1,8 +1,4 @@
-#![allow(unused)]
-
-use ads::Client;
-
-fn main_dumb() {
+fn dumb() {
     let mut sock = std::net::TcpStream::connect("127.0.0.1:48999").unwrap();
     use std::io::{Write,Read};
     let now = std::time::Instant::now();
@@ -16,10 +12,10 @@ fn main_dumb() {
     println!("dumb:   {:?}", now.elapsed());
 }
 
-fn main_client() {
+fn with_client() {
     let timeout = ads::Timeouts::new(std::time::Duration::from_secs(1));
-    let mut client = Client::new("127.0.0.1:48999", timeout, None).unwrap();
-    let mut dev = client.device(ads::AmsAddr::new([1,2,3,4,5,6].into(), 851));
+    let client = ads::Client::new("127.0.0.1:48999", timeout, None).unwrap();
+    let dev = client.device(ads::AmsAddr::new([1,2,3,4,5,6].into(), 851));
     let mut data = [0; 4];
     let now = std::time::Instant::now();
     for _ in 0..5000 {
@@ -29,6 +25,6 @@ fn main_client() {
 }
 
 fn main() {
-    main_dumb();
-    main_client();
+    dumb();
+    with_client();
 }
