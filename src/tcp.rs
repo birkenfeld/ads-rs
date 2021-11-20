@@ -255,22 +255,23 @@ impl Client {
         // Validate the incoming reply.  The reader thread already made sure that
         // it is consistent and addressed to us.
 
-        // Get the pure data length, without result field.
-        let data_len = LE::read_u32(&reply[2..6]) as usize - AMS_HEADER_SIZE + 4;
-
         // The source netid/port must match what we sent.
         if reply[14..22] != request[6..14] {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
         // Read the other fields we need.
-        assert!(reply.len() >= HEADER_SIZE + 4);
+        assert!(reply.len() >= HEADER_SIZE);
         let mut ptr = &reply[22..];
         let ret_cmd = ptr.read_u16::<LE>().expect("size");
         let state_flags = ptr.read_u16::<LE>().expect("size");
-        let _len = ptr.read_u32::<LE>().expect("size");  // includes result field
+        let data_len = ptr.read_u32::<LE>().expect("size");
         let error_code = ptr.read_u32::<LE>().expect("size");
         let invoke_id = ptr.read_u32::<LE>().expect("size");
-        let result = ptr.read_u32::<LE>().expect("size");
+        let result = if reply.len() >= HEADER_SIZE + 4 {
+            ptr.read_u32::<LE>().expect("size")
+        } else {
+            0  // this must be because an error code is already set
+        };
 
         // Command must match.
         if ret_cmd != cmd as u16 {
@@ -292,6 +293,8 @@ impl Client {
         if result != 0 {
             return ads_error(cmd.action(), result);
         }
+
+        let data_len = data_len as usize - 4;
 
         // Distribute the data into the user output buffers.
         let mut offset = HEADER_SIZE + 4;
