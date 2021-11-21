@@ -11,12 +11,25 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! // Open the connection to a PLC.
-//! let timeouts = ads::Timeouts::new(std::time::Duration::from_secs(1));
-//! let client = ads::Client::new("myplc:48898", timeouts, None)?;
+//! // Open a connection to an ADS device identified by hostname/IP and port.
+//! // For TwinCAT devices, a route must be set to allow the client to connect.
+//! // The source AMS address is automatically generated from the local IP,
+//! // but can be explicitly specified as the third argument.
+//! let client = ads::Client::new(("plc", ads::PORT), ads::Timeouts::none(), None)?;
 //!
-//! // Get a handle for a symbol and read data from it.
-//! let handle = client.device
+//! // Specify the target ADS device to talk to, by NetID and AMS port.
+//! // Port 851 usually refers to the first PLC instance.
+//! let device = client.device(ads::AmsAddr::new([5, 32, 116, 5, 1, 1].into(), 851));
+//!
+//! // Ensure that the PLC instance is running.
+//! assert!(device.get_state()?.0 == ads::AdsState::Run);
+//!
+//! // Request a handle to a named symbol in the PLC instance.
+//! let handle = Handle::new(device, "MY_SYMBOL")?;
+//! // Read data in form of an u32 from the handle.
+//! let mut data = [0; 4];
+//! handle.read(&mut data)?;
+//! println!("MY_SYMBOL value is {}", u32::from_le_bytes(data));
 //! ```
 
 #![deny(missing_docs)]
