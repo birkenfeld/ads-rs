@@ -59,8 +59,14 @@ impl Message {
         Self { service: service as u32, items: Vec::with_capacity(8), data }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_service(&mut self, service: u32) {
+        self.service = service;
+        LE::write_u32(&mut self.data[8..12], service);
+    }
+
     /// Parse a UDP message from a byte slice.
-    pub fn parse_reply(data: &[u8], service: u32) -> Result<Self> {
+    pub fn parse(data: &[u8], exp_service: u32) -> Result<Self> {
         let mut data_ptr = data;
         let magic = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
         let invoke_id = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
@@ -71,7 +77,7 @@ impl Message {
         if invoke_id != 0 {  // we're only generating 0
             return Err(Error::Reply("parsing UDP packet", "invalid invoke ID", invoke_id));
         }
-        if rep_service != service | 0x8000_0000 {
+        if rep_service != exp_service {
             return Err(Error::Reply("parsing UDP packet", "invalid service ID", rep_service));
         }
         let _src = AmsAddr::read_from(&mut data_ptr).ctx("parsing UDP packet")?;
@@ -87,7 +93,7 @@ impl Message {
                 data_ptr = &data_ptr[len..];
             }
         }
-        Ok(Self { service, data: data.to_vec(), items })
+        Ok(Self { service: exp_service, data: data.to_vec(), items })
     }
 
     /// Add a tag containing arbitrary bytes.
@@ -104,6 +110,7 @@ impl Message {
     pub fn add_str(&mut self, tag: Tag, data: &str) {
         self.data.write_u16::<LE>(tag as u16).expect("vec");
         let start = self.data.len();
+        // add the null terminator
         self.data.write_u16::<LE>(data.len() as u16 + 1).expect("vec");
         self.data.write_all(data.as_bytes()).expect("vec");
         self.data.write_u8(0).expect("vec");
@@ -135,7 +142,8 @@ impl Message {
 
     /// Get the data for given tag as null-terminated string.
     pub fn get_str(&self, tag: Tag) -> Option<&str> {
-        self.map_tag(tag, |b| str::from_utf8(b).ok())
+        // exclude the null terminator
+        self.map_tag(tag, |b| str::from_utf8(&b[..b.len()-1]).ok())
     }
 
     /// Get the data for given tag as a u32.
@@ -166,7 +174,7 @@ impl Message {
         let (n, _) = sock.recv_from(&mut reply).ctx("receiving UDP reply")?;
 
         // Parse the reply.
-        Self::parse_reply(&reply[..n], self.service)
+        Self::parse(&reply[..n], self.service | 0x8000_0000)
     }
 }
 
@@ -250,10 +258,10 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             };
             let mut string = String::new();
             while let Ok(ch) = bytes.read_u16::<LE>() {
-                string.push(std::char::from_u32(ch.into()).expect("size"));
                 if ch == 0 {
                     break;
                 }
+                string.push(std::char::from_u32(ch.into()).expect("size"));
             }
             (platform, major, minor, build, string)
         } else {

@@ -6,6 +6,7 @@ use std::mem::size_of;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use once_cell::sync::Lazy;
@@ -13,9 +14,10 @@ use zerocopy::{FromBytes, AsBytes, byteorder::{U16, U32, U64, LE}};
 
 use crate::{file, index, tcp};
 
-
 // Test modules.
 mod test_tcp;
+mod test_udp;
+mod test_netid;
 
 
 // Since Cargo tests run multi-threaded, start one server per thread and
@@ -48,7 +50,11 @@ thread_local! {
 // Configures different ways the server should behave.
 #[derive(Default)]
 pub struct ServerOpts {
+    pub timeout: Option<Duration>,
+    pub no_reply: bool,
     pub garbage_header: bool,
+    pub bad_notif: bool,
+    pub ignore_invokeid: bool,
 }
 
 pub fn config_test_server(opts: ServerOpts) -> u16 {
@@ -87,6 +93,10 @@ impl Server {
             let mut data = vec![0; header.data_len.get() as usize];
             socket.read_exact(&mut data).unwrap();
 
+            if opts.no_reply {
+                return;
+            }
+
             let (reply_data, error) = match header.cmd.get() {
                 1 => self.do_devinfo(&data),
                 2 => self.do_read(&data),
@@ -101,7 +111,7 @@ impl Server {
 
             // Generate a notification if they are enabled.
             if let Some((off, len)) = &self.notif {
-                self.send_notification(*off, *len, &header, &mut socket);
+                self.send_notification(*off, *len, &header, opts.bad_notif, &mut socket);
             }
 
             let mut reply_header = AdsHeader::new_zeroed();
@@ -117,7 +127,9 @@ impl Server {
             reply_header.state.set(header.state.get() | 1);
             reply_header.data_len.set(reply_data.len() as u32);
             reply_header.error.set(error);
-            reply_header.inv_id = header.inv_id;
+            if !opts.ignore_invokeid {
+                reply_header.inv_id = header.inv_id;
+            }
             println!("rep: {:?}", reply_header);
 
             socket.write_all(reply_header.as_bytes()).unwrap();
@@ -125,12 +137,13 @@ impl Server {
         }
     }
 
-    fn send_notification(&self, off: usize, len: usize, header: &AdsHeader, socket: &mut TcpStream) {
+    fn send_notification(&self, off: usize, len: usize, header: &AdsHeader,
+                         bad: bool, socket: &mut TcpStream) {
         let data_len = std::mem::size_of::<NotifHdr>() + len;
 
         let mut notif_header = NotifHdr::new_zeroed();
         notif_header.len.set(data_len as u32 - 4);
-        notif_header.stamps.set(1);
+        notif_header.stamps.set(if bad { u32::MAX } else { 1 });
         notif_header.stamp.set(0x9988776655443322);
         notif_header.samples.set(1);
         notif_header.handle.set(132);
@@ -145,6 +158,7 @@ impl Server {
         ads_header.cmd.set(crate::tcp::Command::Notification as u16);
         ads_header.state.set(4);
         ads_header.data_len.set(data_len as u32);
+        println!("not: {:?}", ads_header);
 
         socket.write_all(ads_header.as_bytes()).unwrap();
         socket.write_all(notif_header.as_bytes()).unwrap();

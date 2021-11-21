@@ -116,7 +116,8 @@ pub struct Client {
 impl Drop for Client {
     fn drop(&mut self) {
         // Close all open notification handles.
-        for &(addr, handle) in &*self.notif_handles.borrow() {
+        let handles = std::mem::take(&mut *self.notif_handles.borrow_mut());
+        for (addr, handle) in handles {
             let _ = self.device(addr).delete_notification(handle);
         }
 

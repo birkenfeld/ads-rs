@@ -1,13 +1,18 @@
 //! Test for the TCP client.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::time::Duration;
 
 use crate::{AmsAddr, AmsNetId, Client, Device, Error, Timeouts};
 use crate::test::{ServerOpts, config_test_server};
 
 fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
+    let timeouts = if let Some(tmo) = opts.timeout {
+        Timeouts::new(tmo)
+    } else {
+        Timeouts::none()
+    };
     let port = config_test_server(opts);
-    let timeouts = Timeouts::none();
     let client = Client::new(("127.0.0.1", port), timeouts, None).unwrap();
     f(client.device(AmsAddr::new(AmsNetId::new(1, 2, 3, 4, 5, 6), 851)));
 }
@@ -17,6 +22,27 @@ fn test_garbage_packet() {
     run_test(ServerOpts { garbage_header: true, .. Default::default() }, |device| {
         let err = device.get_info().unwrap_err();
         assert!(matches!(err, Error::Reply(_, "inconsistent packet", _)));
+    })
+}
+
+#[test]
+fn test_timeout() {
+    run_test(ServerOpts { timeout: Some(Duration::from_millis(1)),
+                          no_reply: true,
+                          .. Default::default() }, |device| {
+        let err = device.get_info().unwrap_err();
+        match err {
+            Error::Io(_, ioe) if ioe.kind() == io::ErrorKind::TimedOut => (),
+            _ => panic!("unexpected error from timeout: {}", err)
+        }
+    })
+}
+
+#[test]
+fn test_wrong_invokeid() {
+    run_test(ServerOpts { ignore_invokeid: true, .. Default::default() }, |device| {
+        assert!(matches!(device.get_info().unwrap_err(),
+                         Error::Reply(_, "unexpected invoke ID", 0)));
     })
 }
 
@@ -44,12 +70,12 @@ fn test_readwrite() {
         let data = [1, 6, 8, 9];
         let mut buf = [0; 4];
         device.write(0x4020, 7, &data).unwrap();
-        device.read(0x04020, 7, &mut buf).unwrap();
+        device.read_exact(0x04020, 7, &mut buf).unwrap();
         assert_eq!(data, buf);
 
-        assert!(matches!(device.read(0x4021, 0, &mut buf),
+        assert!(matches!(device.read_exact(0x4021, 0, &mut buf),
                          Err(Error::Ads(_, _, 0x702))));
-        assert!(matches!(device.read(0x4020, 98765, &mut buf),
+        assert!(matches!(device.read_exact(0x4020, 98765, &mut buf),
                          Err(Error::Ads(_, _, 0x703))));
     })
 }
@@ -112,9 +138,32 @@ fn test_notification() {
         let first = chan.try_recv().unwrap();
         let second = chan.try_recv().unwrap();
 
-        assert_eq!(first.samples().next().unwrap(),
+        println!("{:?}", first);
+
+        let mut samples = first.samples();
+        assert_eq!(samples.next().unwrap(),
                    Sample { handle, timestamp: 0x9988776655443322, data: &[4, 4, 1, 1] });
+        assert_eq!(samples.next(), None);
         assert_eq!(second.samples().next().unwrap(),
                    Sample { handle, timestamp: 0x9988776655443322, data: &[8, 8, 1, 1] });
+    })
+}
+
+#[test]
+fn test_bad_notification() {
+    use crate::notif::*;
+    use std::time::Duration;
+    run_test(ServerOpts { bad_notif: true, .. Default::default() }, |device| {
+        let chan = device.client.get_notification_channel();
+
+        let attrib = Attributes::new(4, TransmissionMode::ServerOnChange,
+                                     Duration::from_secs(1), Duration::from_secs(1));
+        let _ = device.add_notification(0x4020, 0, &attrib).unwrap();
+        device.write(0x4020, 0, &[8, 8, 1, 1]).unwrap();
+
+        // No notification should have come through.
+        assert!(chan.try_recv().is_err());
+
+        // Notification is automatically deleted at end of scope.
     })
 }
