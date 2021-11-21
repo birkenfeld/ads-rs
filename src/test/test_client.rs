@@ -58,9 +58,9 @@ fn test_devinfo() {
 #[test]
 fn test_state() {
     run_test(ServerOpts::default(), |device| {
-        device.write_control(crate::tcp::AdsState::Config, 42).unwrap();
-        assert_eq!(device.get_state().unwrap(), (crate::tcp::AdsState::Config, 42));
-        assert!(device.write_control(crate::tcp::AdsState::Invalid, 42).is_err());
+        device.write_control(crate::AdsState::Config, 42).unwrap();
+        assert_eq!(device.get_state().unwrap(), (crate::AdsState::Config, 42));
+        assert!(device.write_control(crate::AdsState::Invalid, 42).is_err());
     })
 }
 

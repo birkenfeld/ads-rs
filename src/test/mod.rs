@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use byteorder::{ReadBytesExt, WriteBytesExt};
+use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
-use zerocopy::{FromBytes, AsBytes, byteorder::{U16, U32, U64, LE}};
+use zerocopy::{FromBytes, AsBytes, byteorder::{U16, U32, U64}};
 
-use crate::{file, index, tcp};
+use crate::{file, index};
 
 // Test modules.
-mod test_tcp;
-mod test_udp;
 mod test_netid;
+mod test_client;
+mod test_udp;
 
 
 // Since Cargo tests run multi-threaded, start one server per thread and
@@ -32,7 +32,7 @@ thread_local! {
         thread::spawn(move || {
             let mut server = Server {
                 opts: opts_server,
-                state: (tcp::AdsState::Run, 0),
+                state: (crate::AdsState::Run, 0),
                 data: vec![0; 1024],
                 file_ptr: None,
                 notif: None,
@@ -73,7 +73,7 @@ struct Server {
     // If a notification has been added, the (offset, size) to send.
     notif: Option<(usize, usize)>,
     // The simulated device state.
-    state: (tcp::AdsState, u16),
+    state: (crate::AdsState, u16),
 }
 
 impl Server {
@@ -81,7 +81,7 @@ impl Server {
         let opts = self.opts.clone();
         loop {
             let opts = opts.lock().unwrap();
-            let mut header = AdsHeader::new_zeroed();
+            let mut header = AdsHeader::default();
             if let Err(e) = socket.read_exact(header.as_bytes_mut()) {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     // connection was closed
@@ -114,7 +114,7 @@ impl Server {
                 self.send_notification(*off, *len, &header, opts.bad_notif, &mut socket);
             }
 
-            let mut reply_header = AdsHeader::new_zeroed();
+            let mut reply_header = AdsHeader::default();
             if opts.garbage_header {
                 reply_header.pad = 234;
             }
@@ -141,7 +141,7 @@ impl Server {
                          bad: bool, socket: &mut TcpStream) {
         let data_len = std::mem::size_of::<NotifHdr>() + len;
 
-        let mut notif_header = NotifHdr::new_zeroed();
+        let mut notif_header = NotifHdr::default();
         notif_header.len.set(data_len as u32 - 4);
         notif_header.stamps.set(if bad { u32::MAX } else { 1 });
         notif_header.stamp.set(0x9988776655443322);
@@ -149,13 +149,13 @@ impl Server {
         notif_header.handle.set(132);
         notif_header.size.set(len as u32);
 
-        let mut ads_header = AdsHeader::new_zeroed();
+        let mut ads_header = AdsHeader::default();
         ads_header.len.set(32 + data_len as u32);
         ads_header.dst_addr = header.src_addr;
         ads_header.dst_port = header.src_port;
         ads_header.src_addr = header.dst_addr;
         ads_header.src_port = header.dst_port;
-        ads_header.cmd.set(crate::tcp::Command::Notification as u16);
+        ads_header.cmd.set(crate::client::Command::Notification as u16);
         ads_header.state.set(4);
         ads_header.data_len.set(data_len as u32);
         println!("not: {:?}", ads_header);
@@ -195,8 +195,8 @@ impl Server {
         let adsstate = data.read_u16::<LE>().unwrap();
         let devstate = data.read_u16::<LE>().unwrap();
         let mut out = vec![];
-        match tcp::AdsState::try_from(adsstate) {
-            Err(_) | Ok(tcp::AdsState::Invalid) => {
+        match crate::AdsState::try_from(adsstate) {
+            Err(_) | Ok(crate::AdsState::Invalid) => {
                 out.write_u32::<LE>(0x70B).unwrap();
             }
             Ok(adsstate) => {
@@ -211,7 +211,9 @@ impl Server {
         if data.len() != size_of::<IndexLen>() {
             return (vec![], 0x706);
         }
-        let request = IndexLen::read_from(data).unwrap();
+        // TODO: when using zerocopy > 0.3, replace by `read_from`.
+        let mut request = IndexLen::default();
+        request.as_bytes_mut().copy_from_slice(data);
         let mut off = request.ioff.get() as usize;
         let len = request.len.get() as usize;
         let mut out = Vec::new();
@@ -237,7 +239,8 @@ impl Server {
         if data.len() < size_of::<IndexLen>() {
             return (vec![], 0x706);
         }
-        let request = IndexLen::read_from(&data[..12]).unwrap();
+        let mut request = IndexLen::default();
+        request.as_bytes_mut().copy_from_slice(&data[..12]);
         let mut off = request.ioff.get() as usize;
         let len = request.len.get() as usize;
 
@@ -268,7 +271,8 @@ impl Server {
         if data.len() < size_of::<Index2Len>() {
             return (vec![], 0x706);
         }
-        let request = Index2Len::read_from(&data[..16]).unwrap();
+        let mut request = Index2Len::default();
+        request.as_bytes_mut().copy_from_slice(&data[..16]);
         let off = request.ioff.get();
         let rlen = request.rlen.get() as usize;
         let wlen = request.wlen.get() as usize;
@@ -343,7 +347,8 @@ impl Server {
         if data.len() != size_of::<AddNotif>() {
             return (vec![], 0x706);
         }
-        let request = AddNotif::read_from(data).unwrap();
+        let mut request = AddNotif::default();
+        request.as_bytes_mut().copy_from_slice(data);
         let off = request.ioff.get() as usize;
         let len = request.len.get() as usize;
 
@@ -375,7 +380,7 @@ impl Server {
     }
 }
 
-#[derive(AsBytes, FromBytes, Debug)]
+#[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
 struct AdsHeader {
     pad:      u16,
@@ -391,7 +396,7 @@ struct AdsHeader {
     inv_id:   U32<LE>,
 }
 
-#[derive(AsBytes, FromBytes, Debug)]
+#[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
 struct IndexLen {
     igrp: U32<LE>,
@@ -399,7 +404,7 @@ struct IndexLen {
     len:  U32<LE>,
 }
 
-#[derive(AsBytes, FromBytes, Debug)]
+#[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
 struct Index2Len {
     igrp: U32<LE>,
@@ -408,7 +413,7 @@ struct Index2Len {
     wlen: U32<LE>,
 }
 
-#[derive(AsBytes, FromBytes, Debug)]
+#[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
 struct AddNotif {
     igrp:  U32<LE>,
@@ -420,7 +425,7 @@ struct AddNotif {
     resvd: [u8; 16],
 }
 
-#[derive(AsBytes, FromBytes, Debug)]
+#[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
 struct NotifHdr {
     len:     U32<LE>,

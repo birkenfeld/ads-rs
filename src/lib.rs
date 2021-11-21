@@ -23,7 +23,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 pub mod netid;
-pub mod tcp;
+pub mod client;
 pub mod notif;
 pub mod udp;
 pub mod errors;
@@ -35,7 +35,9 @@ pub mod symbol;
 mod test;
 
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
-pub use tcp::{Client, Device, Timeouts};
+pub use client::{AdsState, Client, Device, Timeouts};
+pub use symbol::Handle;
+pub use file::File;
 pub use errors::{Error, Result};
 
 /// The default port for TCP communication.

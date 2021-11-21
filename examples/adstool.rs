@@ -111,7 +111,7 @@ enum LicenseAction {
 /// Read or write the ADS state of the device.
 struct StateArgs {
     /// if given, the target state
-    target_state: Option<ads::tcp::AdsState>,
+    target_state: Option<ads::AdsState>,
 }
 
 #[derive(StructOpt, Debug)]
