@@ -99,4 +99,4 @@ pub const FILE_WRITE: u32 = 123;
 pub const FILE_DELETE: u32 = 131;
 
 /// Index group for license queries.
-pub const LICENSE: u32 = 0x01010004;
+pub const LICENSE: u32 = 0x0101_0004;

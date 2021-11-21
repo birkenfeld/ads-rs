@@ -14,13 +14,13 @@ fn udp_replier(sock: UdpSocket) {
     loop {
         let (n, sender) = sock.recv_from(&mut buf).unwrap();
         let mut reply = udp::Message::new(udp::ServiceId::Identify, my_addr);
-        if udp::Message::parse(&buf[..n], 1).is_ok() {
-            reply.set_service(0x8000_0001);
+        if udp::Message::parse(&buf[..n], udp::ServiceId::Identify, false).is_ok() {
+            reply.set_service(udp::ServiceId::Identify, true);
             reply.add_str(udp::Tag::ComputerName, "box");
             reply.add_bytes(udp::Tag::OSVersion, OS_VERSION);
             reply.add_bytes(udp::Tag::TCVersion, b"\x04\x01\x07\x00");
-        } else if let Ok(msg) = udp::Message::parse(&buf[..n], 6) {
-            reply.set_service(0x8000_0006);
+        } else if let Ok(msg) = udp::Message::parse(&buf[..n], udp::ServiceId::AddRoute, false) {
+            reply.set_service(udp::ServiceId::AddRoute, true);
             let status = msg.get_str(udp::Tag::RouteName) != Some("route");
             reply.add_u32(udp::Tag::Status, status as u32);
         } else {

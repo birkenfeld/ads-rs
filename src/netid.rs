@@ -26,7 +26,7 @@ pub type AmsPort = u16;
 
 impl AmsNetId {
     /// Create a NetID from six bytes.
-    pub fn new(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> Self {
+    pub const fn new(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> Self {
         AmsNetId([a, b, c, d, e, f])
     }
 
@@ -84,17 +84,17 @@ pub struct AmsAddr(AmsNetId, AmsPort);
 
 impl AmsAddr {
     /// Create a new address from NetID and port.
-    pub fn new(netid: AmsNetId, port: AmsPort) -> Self {
+    pub const fn new(netid: AmsNetId, port: AmsPort) -> Self {
         Self(netid, port)
     }
 
     /// Return the NetID of this address.
-    pub fn netid(&self) -> AmsNetId {
+    pub const fn netid(&self) -> AmsNetId {
         self.0
     }
 
     /// Return the port of this address.
-    pub fn port(&self) -> AmsPort {
+    pub const fn port(&self) -> AmsPort {
         self.1
     }
 

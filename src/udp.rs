@@ -15,7 +15,6 @@ pub const BECKHOFF_UDP_MAGIC: u32 = 0x_71_14_66_03;
 
 /// Represents a message in the UDP protocol.
 pub struct Message {
-    service: u32,
     items: Vec<(u16, usize, usize)>,
     data: Vec<u8>,
 }
@@ -56,17 +55,22 @@ impl Message {
         }
         source.write_to(&mut data).expect("vec");
         data.write_u32::<LE>(0).expect("vec");  // number of items, will be increased later
-        Self { service: service as u32, items: Vec::with_capacity(8), data }
+        Self { items: Vec::with_capacity(8), data }
     }
 
     #[cfg(test)]
-    pub(crate) fn set_service(&mut self, service: u32) {
-        self.service = service;
+    pub(crate) fn set_service(&mut self, service: ServiceId, reply: bool) {
+        let service = service as u32 | (if reply { 0x8000_0000 } else { 0 });
         LE::write_u32(&mut self.data[8..12], service);
     }
 
     /// Parse a UDP message from a byte slice.
-    pub fn parse(data: &[u8], exp_service: u32) -> Result<Self> {
+    pub fn parse(data: &[u8], exp_service: ServiceId, reply: bool) -> Result<Self> {
+        let exp_service = exp_service as u32 | (if reply { 0x8000_0000 } else { 0 });
+        Self::parse_internal(data, exp_service)
+    }
+
+    fn parse_internal(data: &[u8], exp_service: u32) -> Result<Self> {
         let mut data_ptr = data;
         let magic = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
         let invoke_id = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
@@ -93,7 +97,7 @@ impl Message {
                 data_ptr = &data_ptr[len..];
             }
         }
-        Ok(Self { service: exp_service, data: data.to_vec(), items })
+        Ok(Self { data: data.to_vec(), items })
     }
 
     /// Add a tag containing arbitrary bytes.
@@ -174,7 +178,7 @@ impl Message {
         let (n, _) = sock.recv_from(&mut reply).ctx("receiving UDP reply")?;
 
         // Parse the reply.
-        Self::parse(&reply[..n], self.service | 0x8000_0000)
+        Self::parse_internal(&reply[..n], LE::read_u32(&self.data[8..]) | 0x8000_0000)
     }
 }
 
