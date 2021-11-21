@@ -199,6 +199,11 @@ impl Client {
         })
     }
 
+    /// Return the source address the client is using.
+    pub fn source(&self) -> AmsAddr {
+        self.source
+    }
+
     /// Get a receiver for notifications.
     pub fn get_notification_channel(&self) -> Receiver<notif::Notification> {
         self.notif_recv.clone()
