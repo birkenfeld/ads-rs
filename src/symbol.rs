@@ -1,7 +1,7 @@
 //! Wrapper for symbol handles.
 
-use crate::{Device, Result};
 use crate::index;
+use crate::{Device, Result};
 
 /// A handle to a variable within the ADS device.
 ///

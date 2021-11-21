@@ -3,8 +3,8 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
+use crate::test::{config_test_server, ServerOpts};
 use crate::{AmsAddr, AmsNetId, Client, Device, Error, Timeouts};
-use crate::test::{ServerOpts, config_test_server};
 
 fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
     let timeouts = if let Some(tmo) = opts.timeout {

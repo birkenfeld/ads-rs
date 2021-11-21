@@ -1,12 +1,12 @@
 //! Contains the AMS NetId and related types.
 
 use std::convert::TryInto;
-use std::net::Ipv4Addr;
-use std::str::FromStr;
 use std::fmt::{self, Display};
 use std::io::{Read, Write};
+use std::net::Ipv4Addr;
+use std::str::FromStr;
 
-use byteorder::{LE, ReadBytesExt, WriteBytesExt};
+use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
 
 /// Represents an AMS NetID.

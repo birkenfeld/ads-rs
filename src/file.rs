@@ -2,8 +2,8 @@
 
 use std::io;
 
-use crate::{Device, Error, Result};
 use crate::index;
+use crate::{Device, Error, Result};
 
 /// A file opened within the PLC.  Files implement `Read` and `Write`, so they
 /// can be used like normal files in Rust APIs.
@@ -21,7 +21,7 @@ impl<'c> File<'c> {
         device.write_read(index::FILE_OPEN, flags, filename.as_ref(), &mut hdl)?;
         Ok(File {
             device,
-            handle: u32::from_le_bytes(hdl)
+            handle: u32::from_le_bytes(hdl),
         })
     }
 
@@ -63,7 +63,7 @@ fn map_error(e: Error) -> io::Error {
         Error::Io(_, io_error) => io_error,
         Error::Ads(_, _, 0x704) => io::ErrorKind::InvalidInput.into(),
         Error::Ads(_, _, 0x70C) => io::ErrorKind::NotFound.into(),
-        _ => io::Error::new(io::ErrorKind::Other, e.to_string())
+        _ => io::Error::new(io::ErrorKind::Other, e.to_string()),
     }
 }
 

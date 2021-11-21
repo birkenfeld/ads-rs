@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use ads::{Client, Timeouts};
 use ads::notif::{Attributes, TransmissionMode};
+use ads::{Client, Timeouts};
 
 fn main() {
     let client = Client::new(("localhost", ads::PORT), Timeouts::none(), None).unwrap();

@@ -8,10 +8,10 @@ use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::time::Duration;
 
-use byteorder::{LE, ByteOrder, ReadBytesExt, WriteBytesExt};
-use crossbeam_channel::{bounded, unbounded, Sender, Receiver};
+use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
-use crate::errors::{ErrContext, ads_error};
+use crate::errors::{ads_error, ErrContext};
 use crate::notif;
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
@@ -61,7 +61,7 @@ impl Command {
 /// Size of the AMS/TCP + ADS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
 const HEADER_SIZE: usize = 38;
-const AMS_HEADER_SIZE: usize = HEADER_SIZE - 6;  // without leading nulls and length
+const AMS_HEADER_SIZE: usize = HEADER_SIZE - 6; // without leading nulls and length
 const DEFAULT_BUFFER_SIZE: usize = 100;
 
 /// Holds the different timeouts that will be used by the Client.
@@ -395,7 +395,6 @@ impl Reader {
     }
 }
 
-
 /// A `Client` wrapper that talks to a specific ADS device.
 #[derive(Clone, Copy)]
 pub struct Device<'c> {
@@ -415,7 +414,7 @@ impl<'c> Device<'c> {
             major: data[0],
             minor: data[1],
             version: LE::read_u16(&data[2..]),
-            name
+            name,
         })
     }
 

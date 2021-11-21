@@ -182,6 +182,6 @@ pub const ADS_ERRORS: &[(u32, &str)] = &[
 pub fn ads_error<T>(action: &'static str, err: u32) -> Result<T> {
     match ADS_ERRORS.binary_search_by_key(&err, |e| e.0) {
         Ok(idx) => Err(Error::Ads(action, ADS_ERRORS[idx].1, err)),
-        Err(_) => Err(Error::Ads(action, "Unknown error code", err))
+        Err(_) => Err(Error::Ads(action, "Unknown error code", err)),
     }
 }

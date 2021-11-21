@@ -3,10 +3,10 @@
 use std::io;
 use std::time::Duration;
 
-use byteorder::{LE, ReadBytesExt};
+use byteorder::{ReadBytesExt, LE};
 
-use crate::{Error, Result};
 use crate::errors::ErrContext;
+use crate::{Error, Result};
 
 /// A handle to the notification; this can be used to delete the notification later.
 pub type Handle = u32;

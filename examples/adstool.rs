@@ -1,11 +1,11 @@
 //! Reproduces the functionality of "adstool" from the Beckhoff ADS C++ library.
 
 use std::convert::TryInto;
-use std::io::{Read, Write, stdin, stdout};
+use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
 use parse_int::parse;
-use structopt::{StructOpt, clap::ArgGroup, clap::AppSettings};
+use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
 use strum::EnumString;
 
 #[derive(StructOpt, Debug)]
@@ -61,11 +61,11 @@ struct AddRouteArgs {
     routename: Option<String>,
 
     /// password for logging into the system (defaults to `1`)
-    #[structopt(long, default_value="1")]
+    #[structopt(long, default_value = "1")]
     password: String,
 
     /// username for logging into the system (defaults to `Administrator`)
-    #[structopt(long, default_value="Administrator")]
+    #[structopt(long, default_value = "Administrator")]
     username: String,
 
     /// mark route as temporary?
@@ -93,7 +93,7 @@ enum FileAction {
     Delete {
         /// the file path
         path: String,
-    }
+    },
 }
 
 #[derive(StructOpt, Debug)]
@@ -135,7 +135,7 @@ enum RawAction {
         r#type: Option<VarType>,
         /// whether to print integers as hex
         #[structopt(long)]
-        hex: bool
+        hex: bool,
     },
     /// Write some data to an index.  Data is read from stdin.
     Write {
@@ -163,7 +163,7 @@ enum RawAction {
         r#type: Option<VarType>,
         /// whether to print integers as hex
         #[structopt(long)]
-        hex: bool
+        hex: bool,
     },
 }
 
@@ -178,7 +178,7 @@ struct VarArgs {
     value: Option<String>,
     /// whether to print integers as hex
     #[structopt(long)]
-    hex: bool
+    hex: bool,
 }
 
 #[derive(Clone, Copy, Debug, EnumString)]
@@ -220,7 +220,7 @@ struct Target {
     host: String,
     port: Option<u16>,
     netid: Option<ads::AmsNetId>,
-    amsport: Option<ads::AmsPort>
+    amsport: Option<ads::AmsPort>,
 }
 
 const RX: &str = "(?P<host>[^:/]+)(:(?P<port>\\d+))?(/(?P<netid>[0-9.]+)(:(?P<amsport>\\d+))?)?$";
@@ -241,7 +241,6 @@ impl FromStr for Target {
         }
     }
 }
-
 
 fn main() {
     let args = Args::from_args();
@@ -448,11 +447,11 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
             match buf[0] {
                 0 => println!("FALSE"),
                 1 => println!("TRUE"),
-                n => println!("non-bool ({})", n)
+                n => println!("non-bool ({})", n),
             }
             return;
         }
-        VarType::Real  => {
+        VarType::Real => {
             let v = f32::from_le_bytes(buf[..4].try_into().expect("size"));
             println!("{}", v);
             return;

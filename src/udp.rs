@@ -5,10 +5,10 @@ use std::io::Write;
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::str;
 
-use byteorder::{LE, ReadBytesExt, WriteBytesExt, ByteOrder};
+use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 
-use crate::{AmsAddr, AmsNetId, Error, Result};
 use crate::errors::ErrContext;
+use crate::{AmsAddr, AmsNetId, Error, Result};
 
 /// Magic number for the first four bytes of each UDP packet.
 pub const BECKHOFF_UDP_MAGIC: u32 = 0x_71_14_66_03;
@@ -147,7 +147,7 @@ impl Message {
     /// Get the data for given tag as null-terminated string.
     pub fn get_str(&self, tag: Tag) -> Option<&str> {
         // exclude the null terminator
-        self.map_tag(tag, |b| str::from_utf8(&b[..b.len()-1]).ok())
+        self.map_tag(tag, |b| str::from_utf8(&b[..b.len() - 1]).ok())
     }
 
     /// Get the data for given tag as a u32.

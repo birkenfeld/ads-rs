@@ -10,15 +10,17 @@ use std::time::Duration;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
-use zerocopy::{FromBytes, AsBytes, byteorder::{U16, U32, U64}};
+use zerocopy::{
+    byteorder::{U16, U32, U64},
+    AsBytes, FromBytes,
+};
 
 use crate::{file, index};
 
 // Test modules.
-mod test_netid;
 mod test_client;
+mod test_netid;
 mod test_udp;
-
 
 // Since Cargo tests run multi-threaded, start one server per thread and
 // handle clients from the test functions in that thread.
@@ -223,7 +225,7 @@ impl Server {
             if off != 77 {
                 return (vec![], 0x710);
             }
-            off = 1020;  // symbol lives at the end of self.data
+            off = 1020; // symbol lives at the end of self.data
         } else if request.igrp.get() != index::PLC_RW_M {
             return (vec![], 0x702);
         }

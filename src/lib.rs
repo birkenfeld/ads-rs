@@ -34,11 +34,11 @@ pub mod symbol;
 #[cfg(test)]
 mod test;
 
-pub use netid::{AmsAddr, AmsNetId, AmsPort};
 pub use client::{AdsState, Client, Device, Timeouts};
-pub use symbol::Handle;
-pub use file::File;
 pub use errors::{Error, Result};
+pub use file::File;
+pub use netid::{AmsAddr, AmsNetId, AmsPort};
+pub use symbol::Handle;
 
 /// The default port for TCP communication.
 pub const PORT: u16 = 0xBF02;
