@@ -24,7 +24,7 @@
 
 pub mod netid;
 pub mod tcp;
-pub mod notify;
+pub mod notif;
 pub mod udp;
 pub mod errors;
 pub mod ports;
@@ -32,9 +32,7 @@ pub mod index;
 pub mod file;
 pub mod symbol;
 #[cfg(test)]
-mod testing;
-#[cfg(test)]
-mod test_tcp;
+mod test;
 
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
 pub use tcp::{Client, Device, Timeouts};

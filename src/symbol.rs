@@ -21,12 +21,12 @@ impl<'c> Handle<'c> {
     }
 
     /// Read data from the variable.
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
         self.device.read(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
     }
 
     /// Write data to the variable.
-    pub fn write(&mut self, buf: &[u8]) -> Result<()> {
+    pub fn write(&self, buf: &[u8]) -> Result<()> {
         self.device.write(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
     }
 }

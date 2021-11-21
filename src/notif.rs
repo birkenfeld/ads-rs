@@ -81,8 +81,7 @@ impl Notification {
                     ptr = &ptr[length..];
                 } else {
                     return Err(Error::Io("parsing notification",
-                                         io::Error::new(io::ErrorKind::UnexpectedEof,
-                                                        "unexpected end of buffer")));
+                                         io::ErrorKind::UnexpectedEof.into()));
                 }
             }
         }
@@ -90,8 +89,7 @@ impl Notification {
             Ok(Self { data, nstamps })
         } else {
             Err(Error::Io("parsing notification",
-                          io::Error::new(io::ErrorKind::UnexpectedEof,
-                                         "too many bytes in notification")))
+                          io::ErrorKind::UnexpectedEof.into()))
         }
     }
 
@@ -103,7 +101,7 @@ impl Notification {
 }
 
 /// A single sample in a notification message.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sample<'a> {
     /// The notification handle associated with the data.
     pub handle: Handle,

@@ -35,10 +35,7 @@ impl<'a> io::Write for File<'a> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         self.device.write_read(index::FILE_WRITE, self.handle, data, &mut [])
                    // need to convert errors back to io::Error
-                   .map_err(|e| match e {
-                       Error::Io(_, io_error) => io_error,
-                       _ => io::Error::new(io::ErrorKind::Other, e.to_string())
-                   })
+                   .map_err(map_error)
                    // no info about written length is returned
                    .map(|_| data.len())
     }
@@ -50,17 +47,23 @@ impl<'a> io::Write for File<'a> {
 
 impl<'a> std::io::Read for File<'a> {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
-        self.device.write_read(index::FILE_READ, self.handle, &[], data)
-                   .map_err(|e| match e {
-                       Error::Io(_, io_error) => io_error,
-                       _ => io::Error::new(io::ErrorKind::Other, e.to_string())
-                   })
+        self.device.write_read(index::FILE_READ, self.handle, &[], data).map_err(map_error)
     }
 }
 
 impl<'a> Drop for File<'a> {
     fn drop(&mut self) {
         let _ = self.device.write_read(index::FILE_CLOSE, self.handle, &[], &mut []);
+    }
+}
+
+// Map an ads::Error to an io::Error, trying to keep semantics where possible
+fn map_error(e: Error) -> io::Error {
+    match e {
+        Error::Io(_, io_error) => io_error,
+        Error::Ads(_, _, 0x704) => io::ErrorKind::InvalidInput.into(),
+        Error::Ads(_, _, 0x70C) => io::ErrorKind::NotFound.into(),
+        _ => io::Error::new(io::ErrorKind::Other, e.to_string())
     }
 }
 

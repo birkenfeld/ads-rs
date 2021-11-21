@@ -394,7 +394,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
-            let mut handle = ads::symbol::Handle::new(dev, &subargs.name)?;
+            let handle = ads::symbol::Handle::new(dev, &subargs.name)?;
             let typ = subargs.r#type;
 
             // Write or read data?

@@ -12,7 +12,7 @@ use byteorder::{LE, ByteOrder, ReadBytesExt, WriteBytesExt};
 use crossbeam_channel::{bounded, unbounded, Sender, Receiver};
 
 use crate::errors::{ErrContext, ads_error};
-use crate::notify;
+use crate::notif;
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
 /// An ADS protocol command.
@@ -91,8 +91,8 @@ impl Timeouts {
 /// Represents a connection to a ADS server.
 ///
 /// The Client's communication methods use `&self`, so that it can be freely
-/// shared within one thread, and different calls will be made from the
-/// different wrappers, such as `Device` or `symbol::Handle`.
+/// shared within one thread, or sent, between threads.  Wrappers such as
+/// `Device` or `symbol::Handle` use a `&Client` as well.
 pub struct Client {
     /// TCP connection (duplicated with the reader)
     socket: TcpStream,
@@ -108,9 +108,9 @@ pub struct Client {
     /// Receiver for synchronous replies: used in `communicate`
     reply_recv: Receiver<Result<Vec<u8>>>,
     /// Receiver for notifications: cloned and given out to interested parties
-    notif_recv: Receiver<notify::Notification>,
+    notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
-    notif_handles: RefCell<BTreeSet<(AmsAddr, notify::Handle)>>,
+    notif_handles: RefCell<BTreeSet<(AmsAddr, notif::Handle)>>,
 }
 
 impl Drop for Client {
@@ -199,7 +199,7 @@ impl Client {
     }
 
     /// Get a receiver for notifications.
-    pub fn get_notification_channel(&self) -> Receiver<notify::Notification> {
+    pub fn get_notification_channel(&self) -> Receiver<notif::Notification> {
         self.notif_recv.clone()
     }
 
@@ -243,13 +243,11 @@ impl Client {
 
         // Get a reply from the reader thread, with timeout or not.
         let reply = if let Some(tmo) = self.read_timeout {
-            self.reply_recv.recv_timeout(tmo).map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "read timeout")
-            }).ctx("receiving reply from channel")?
+            self.reply_recv.recv_timeout(tmo).map_err(|_| io::ErrorKind::TimedOut.into())
+                                             .ctx("receiving reply from channel")?
         } else {
-            self.reply_recv.recv().map_err(|_| {
-                io::Error::new(io::ErrorKind::UnexpectedEof, "no data to read")
-            }).ctx("receiving reply from channel")?
+            self.reply_recv.recv().map_err(|_| io::ErrorKind::UnexpectedEof.into())
+                                  .ctx("receiving reply from channel")?
         }?;
 
         // Validate the incoming reply.  The reader thread already made sure that
@@ -301,7 +299,7 @@ impl Client {
         let mut rest_len = data_len;
         for buf in data_out {
             let n = buf.len().min(rest_len);
-            buf.copy_from_slice(&reply[offset..offset + n]);
+            buf[..n].copy_from_slice(&reply[offset..][..n]);
             offset += n;
             rest_len -= n;
             if rest_len == 0 {
@@ -324,7 +322,7 @@ struct Reader {
     source: [u8; 8],
     buf_recv: Receiver<Vec<u8>>,
     reply_send: Sender<Result<Vec<u8>>>,
-    notif_send: Sender<notify::Notification>,
+    notif_send: Sender<notif::Notification>,
 }
 
 impl Reader {
@@ -389,7 +387,7 @@ impl Reader {
             }
 
             // Send the notification to whoever wants to receive it.
-            if let Ok(notif) = notify::Notification::new(buf) {
+            if let Ok(notif) = notif::Notification::new(buf) {
                 self.notif_send.send(notif).expect("never disconnects");
             }
         }
@@ -400,7 +398,8 @@ impl Reader {
 /// A `Client` wrapper that talks to a specific ADS device.
 #[derive(Clone, Copy)]
 pub struct Device<'c> {
-    client: &'c Client,
+    /// The underlying `Client`.
+    pub client: &'c Client,
     addr: AmsAddr,
 }
 
@@ -480,12 +479,12 @@ impl<'c> Device<'c> {
     ///
     /// Notifications are delivered via a MPMC channel whose reading end can be
     /// obtained from `get_notification_channel` on the `Client` object.
+    /// The returned `Handle` can be used to check which notification has fired.
     ///
-    /// If the notification is not deleted explictly using
-    /// `delete_notification`, it is deleted when the `Client` object is
-    /// dropped.
+    /// If the notification is not deleted explictly using `delete_notification`
+    /// and the `Handle`, it is deleted when the `Client` object is dropped.
     pub fn add_notification(&self, index_group: u32, index_offset: u32,
-                            attributes: &notify::Attributes) -> Result<notify::Handle> {
+                            attributes: &notif::Attributes) -> Result<notif::Handle> {
         let mut data = [0; 40];
         LE::write_u32_into(&[index_group,
                              index_offset,
@@ -504,7 +503,7 @@ impl<'c> Device<'c> {
     }
 
     /// Delete a notification with given handle.
-    pub fn delete_notification(&self, handle: notify::Handle) -> Result<()> {
+    pub fn delete_notification(&self, handle: notif::Handle) -> Result<()> {
         let data = handle.to_le_bytes();
         self.client.communicate(Command::DeleteNotification, self.addr, &[&data], &mut [])?;
         self.client.notif_handles.borrow_mut().remove(&(self.addr, handle));
