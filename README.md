@@ -1,6 +1,6 @@
 # `ads`
 
-[![Build status](https://github.com/birkenfeld/ads-rs/actions/workflows/main/badge.svg)](https://github.com/birkenfeld/ads-rs)
+[![Build status](https://github.com/birkenfeld/ads-rs/actions/workflows/main.yml/badge.svg)](https://github.com/birkenfeld/ads-rs)
 [![crates.io](https://img.shields.io/crates/v/ads.svg)](https://crates.io/crates/ads)
 [![docs.rs](https://img.shields.io/docsrs/ads)](https://docs.rs/ads)
 
