@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
+use zerocopy::{AsBytes, FromBytes};
 
 /// Represents an AMS NetID.
 ///
@@ -18,7 +19,8 @@ use itertools::Itertools;
 /// Although often the first 4 bytes of a NetID look like an IP address, and
 /// sometimes even are identical to the device's IP address, there is no
 /// requirement for this, and one should never rely on it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug, AsBytes, FromBytes)]
+#[repr(C)]
 pub struct AmsNetId(pub [u8; 6]);
 
 /// An AMS port is, similar to an IP port, a 16-bit integer.

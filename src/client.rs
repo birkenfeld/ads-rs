@@ -8,12 +8,15 @@ use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::time::Duration;
 
-use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
+use byteorder::{ByteOrder, ReadBytesExt, LE};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 use crate::errors::{ads_error, ErrContext};
 use crate::notif;
 use crate::{AmsAddr, AmsNetId, Error, Result};
+
+use zerocopy::byteorder::{U16, U32};
+use zerocopy::{AsBytes, FromBytes};
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -239,7 +242,6 @@ impl Client {
     pub fn communicate(&self,
                        cmd: Command,
                        target: AmsAddr,
-                       min_len_out: usize,
                        data_in: &[&[u8]],
                        data_out: &mut [&mut [u8]]) -> Result<usize> {
         // Increase the invoke ID.  We could also generate a random u32, but
@@ -249,22 +251,26 @@ impl Client {
         // The data we send is the sum of all data_in buffers.
         let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
 
-        // Create the outgoing header.  Note, allocating a Vec and calling
+        // Create outgoing header.
+        let header = AdsHeader {
+            padding:     0,
+            length:      U32::new((AMS_HEADER_SIZE + data_in_len).try_into()?),
+            dest_netid:  target.netid(),
+            dest_port:   U16::new(target.port()),
+            src_netid:   self.source.netid(),
+            src_port:    U16::new(self.source.port()),
+            command:     U16::new(cmd as u16),
+            state_flags: U16::new(4),                   // state flags (4 = send command)
+            data_length: U32::new(data_in_len as u32),  // overflow checked above
+            error_code:  U32::new(0),
+            invoke_id:   U32::new(self.invoke_id.get()),
+        };
+
+        // Collect the outgoing data.  Note, allocating a Vec and calling
         // `socket.write_all` only once is faster than writing in multiple
         // steps, even with TCP_NODELAY.
         let mut request = Vec::with_capacity(HEADER_SIZE + data_in_len);
-        let rest_len = (AMS_HEADER_SIZE + data_in_len).try_into()?;
-        request.write_u16::<LE>(0).expect("vec");                   // initial padding (always 0)
-        request.write_u32::<LE>(rest_len).expect("vec");            // length of rest of message
-        target.write_to(&mut request).expect("vec");                // dest netid+port
-        self.source.write_to(&mut request).expect("vec");           // source netid+port
-        request.write_u16::<LE>(cmd as u16).expect("vec");          // command id
-        request.write_u16::<LE>(4).expect("vec");                   // state flags (4 = send command)
-        request.write_u32::<LE>(data_in_len as u32).expect("vec");  // length (overflow checked above)
-        request.write_u32::<LE>(0).expect("vec");                   // error, always 0 when sending
-        request.write_u32::<LE>(self.invoke_id.get()).expect("vec"); // invoke ID
-
-        // Add the outgoing user data.
+        request.extend_from_slice(header.as_bytes());
         for buf in data_in {
             request.extend_from_slice(buf);
         }
@@ -289,6 +295,7 @@ impl Client {
         }
         // Read the other fields we need.
         assert!(reply.len() >= HEADER_SIZE);
+        // TODO: use AdsHeader::read_from with zerocopy 0.6
         let mut ptr = &reply[22..];
         let ret_cmd = ptr.read_u16::<LE>().expect("size");
         let state_flags = ptr.read_u16::<LE>().expect("size");
@@ -322,9 +329,15 @@ impl Client {
             return ads_error(cmd.action(), result);
         }
 
-        // Check returned length against what the caller wants.  This also ensures that
-        // we had a result field.
-        if (data_len as usize) < min_len_out + 4 {
+        // If we don't want return data, we're done.
+        if data_out.is_empty() {
+            let _ = self.buf_send.send(reply);
+            return Ok(0);
+        }
+
+        // Check returned length, it needs to fill at least the first data_out
+        // buffer.  This also ensures that we had a result field.
+        if (data_len as usize) < data_out[0].len() + 4 {
             return Err(Error::Reply(cmd.action(), "got less data than expected", data_len));
         }
 
@@ -445,29 +458,35 @@ pub struct Device<'c> {
 impl<'c> Device<'c> {
     /// Read the device's name + version.
     pub fn get_info(&self) -> Result<DeviceInfo> {
-        let mut data = [0; 20];
-        self.client.communicate(Command::DevInfo, self.addr, data.len(), &[], &mut [&mut data])?;
+        let mut data = DeviceInfoRaw::default();
+        self.client.communicate(Command::DevInfo, self.addr,
+                                &[], &mut [data.as_bytes_mut()])?;
 
         // Decode the name string, which is null-terminated.  Technically it's
         // Windows-1252, but in practice no non-ASCII occurs.
-        let name = data[4..].iter().take_while(|&&ch| ch > 0)
+        let name = data.name.iter().take_while(|&&ch| ch > 0)
                                    .map(|&ch| ch as char).collect::<String>();
         Ok(DeviceInfo {
-            major: data[0],
-            minor: data[1],
-            version: LE::read_u16(&data[2..]),
+            major: data.major,
+            minor: data.minor,
+            version: data.version.get(),
             name,
         })
     }
 
     /// Read some data at a given index group/offset.
     pub fn read(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<usize> {
-        let mut header = [0; 12];
-        LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
-        let mut read_len = [0; 4];
-        self.client.communicate(Command::Read, self.addr, read_len.len(),
-                                &[&header], &mut [&mut read_len, data])?;
-        Ok(u32::from_le_bytes(read_len) as usize)
+        let header = IndexLength {
+            index_group:  U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            length:       U32::new(data.len().try_into()?),
+        };
+        let mut read_len = U32::<LE>::new(0);
+
+        self.client.communicate(Command::Read, self.addr,
+                                &[header.as_bytes()], &mut [read_len.as_bytes_mut(), data])?;
+
+        Ok(read_len.get() as usize)
     }
 
     /// Read some data at a given index group/offset.
@@ -481,9 +500,13 @@ impl<'c> Device<'c> {
 
     /// Write some data to a given index group/offset.
     pub fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
-        let mut header = [0; 12];
-        LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
-        self.client.communicate(Command::Write, self.addr, 0, &[&header, data], &mut [])?;
+        let header = IndexLength {
+            index_group:  U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            length:       U32::new(data.len().try_into()?),
+        };
+        self.client.communicate(Command::Write, self.addr,
+                                &[header.as_bytes(), data], &mut [])?;
         Ok(())
     }
 
@@ -492,31 +515,41 @@ impl<'c> Device<'c> {
     /// it is used as a kind of RPC call.
     pub fn write_read(&self, index_group: u32, index_offset: u32, write_data: &[u8],
                       read_data: &mut [u8]) -> Result<usize> {
-        let mut header = [0; 16];
-        LE::write_u32_into(&[index_group, index_offset,
-                             read_data.len().try_into()?, write_data.len().try_into()?], &mut header);
-        let mut read_len = [0; 4];
-        self.client.communicate(Command::ReadWrite, self.addr, read_len.len(),
-                                &[&header, write_data], &mut [&mut read_len, read_data])?;
-        Ok(u32::from_le_bytes(read_len) as usize)
+        let header = IndexLengthRW {
+            index_group:  U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            read_length:  U32::new(read_data.len().try_into()?),
+            write_length: U32::new(write_data.len().try_into()?),
+        };
+        let mut read_len = U32::<LE>::new(0);
+        self.client.communicate(Command::ReadWrite, self.addr,
+                                &[header.as_bytes(), write_data],
+                                &mut [read_len.as_bytes_mut(), read_data])?;
+        Ok(read_len.get() as usize)
     }
 
     /// Return the ADS and device state of the device.
     pub fn get_state(&self) -> Result<(AdsState, u16)> {
-        let mut data = [0; 4];
-        self.client.communicate(Command::ReadState, self.addr, data.len(), &[], &mut [&mut data])?;
+        let mut state = ReadState::default();
+        self.client.communicate(Command::ReadState, self.addr,
+                                &[], &mut [state.as_bytes_mut()])?;
 
-        let state_const = LE::read_u16(&data);
-        Ok((AdsState::try_from(state_const)
-            .map_err(|e| Error::Reply("read state", e, state_const.into()))?,
-            LE::read_u16(&data[2..])))
+        // Convert ADS state to the enum type
+        let ads_state = AdsState::try_from(state.ads_state.get())
+            .map_err(|e| Error::Reply("read state", e, state.ads_state.get().into()))?;
+
+        Ok((ads_state, state.dev_state.get()))
     }
 
     /// (Try to) set the ADS and device state of the device.
     pub fn write_control(&self, ads_state: AdsState, dev_state: u16) -> Result<()> {
-        let mut data = [0; 8];
-        LE::write_u16_into(&[ads_state as u16, dev_state], &mut data[..4]);
-        self.client.communicate(Command::WriteControl, self.addr, 0, &[&data], &mut [])?;
+        let data = WriteControl {
+            ads_state:   U16::new(ads_state as _),
+            dev_state:   U16::new(dev_state),
+            data_length: U32::new(0),
+        };
+        self.client.communicate(Command::WriteControl, self.addr,
+                                &[data.as_bytes()], &mut [])?;
         Ok(())
     }
 
@@ -530,28 +563,26 @@ impl<'c> Device<'c> {
     /// and the `Handle`, it is deleted when the `Client` object is dropped.
     pub fn add_notification(&self, index_group: u32, index_offset: u32,
                             attributes: &notif::Attributes) -> Result<notif::Handle> {
-        let mut data = [0; 40];
-        LE::write_u32_into(&[index_group,
-                             index_offset,
-                             attributes.length.try_into()?,
-                             attributes.trans_mode as u32,
-                             attributes.max_delay.as_millis().try_into()?,
-                             attributes.cycle_time.as_millis().try_into()?],
-                           // final 16 bytes are reserved
-                           &mut data[0..24]);
-        let mut handle = [0; 4];
-        self.client.communicate(Command::AddNotification, self.addr, handle.len(),
-                                &[&data], &mut [&mut handle])?;
-        let handle = u32::from_le_bytes(handle);
-        self.client.notif_handles.borrow_mut().insert((self.addr, handle));
-        Ok(handle)
+        let data = AddNotif {
+            index_group:  U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            length:       U32::new(attributes.length.try_into()?),
+            trans_mode:   U32::new(attributes.trans_mode as u32),
+            max_delay:    U32::new(attributes.max_delay.as_millis().try_into()?),
+            cycle_time:   U32::new(attributes.cycle_time.as_millis().try_into()?),
+            reserved:     [0; 16],
+        };
+        let mut handle = U32::<LE>::new(0);
+        self.client.communicate(Command::AddNotification, self.addr,
+                                &[data.as_bytes()], &mut [handle.as_bytes_mut()])?;
+        self.client.notif_handles.borrow_mut().insert((self.addr, handle.get()));
+        Ok(handle.get())
     }
 
     /// Delete a notification with given handle.
     pub fn delete_notification(&self, handle: notif::Handle) -> Result<()> {
-        let data = handle.to_le_bytes();
-        self.client.communicate(Command::DeleteNotification, self.addr, 0,
-                                &[&data], &mut [])?;
+        self.client.communicate(Command::DeleteNotification, self.addr,
+                                &[U32::<LE>::new(handle).as_bytes()], &mut [])?;
         self.client.notif_handles.borrow_mut().remove(&(self.addr, handle));
         Ok(())
     }
@@ -646,4 +677,78 @@ impl FromStr for AdsState {
             _  => return Err("invalid state name")
         })
     }
+}
+
+// Structures used in communication, not exposed to user,
+// but pub(crate) for the test suite.
+
+// TODO: with zerocopy 0.6+, use new_zeroed instead of deriving Default
+
+#[derive(AsBytes, FromBytes, Debug, Default)]
+#[repr(C)]
+pub(crate) struct AdsHeader {
+    pub padding:     u16,
+    pub length:      U32<LE>,
+    pub dest_netid:  AmsNetId,
+    pub dest_port:   U16<LE>,
+    pub src_netid:   AmsNetId,
+    pub src_port:    U16<LE>,
+    pub command:     U16<LE>,
+    pub state_flags: U16<LE>,
+    pub data_length: U32<LE>,
+    pub error_code:  U32<LE>,
+    pub invoke_id:   U32<LE>,
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct DeviceInfoRaw {
+    pub major:   u8,
+    pub minor:   u8,
+    pub version: U16<LE>,
+    pub name:    [u8; 16],
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct IndexLength {
+    pub index_group:  U32<LE>,
+    pub index_offset: U32<LE>,
+    pub length:       U32<LE>,
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct IndexLengthRW {
+    pub index_group:  U32<LE>,
+    pub index_offset: U32<LE>,
+    pub read_length:  U32<LE>,
+    pub write_length: U32<LE>,
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct ReadState {
+    pub ads_state:   U16<LE>,
+    pub dev_state:   U16<LE>,
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct WriteControl {
+    pub ads_state:   U16<LE>,
+    pub dev_state:   U16<LE>,
+    pub data_length: U32<LE>,
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct AddNotif {
+    pub index_group:  U32<LE>,
+    pub index_offset: U32<LE>,
+    pub length:       U32<LE>,
+    pub trans_mode:   U32<LE>,
+    pub max_delay:    U32<LE>,
+    pub cycle_time:   U32<LE>,
+    pub reserved:     [u8; 16],
 }

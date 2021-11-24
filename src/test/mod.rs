@@ -11,10 +11,11 @@ use std::time::Duration;
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
 use zerocopy::{
-    byteorder::{U16, U32, U64},
+    byteorder::{U32, U64},
     AsBytes, FromBytes,
 };
 
+use crate::client::{AddNotif, AdsHeader, IndexLength, IndexLengthRW};
 use crate::{file, index};
 
 // Test modules.
@@ -92,14 +93,14 @@ impl Server {
                 panic!("unexpected receive error: {}", e);
             }
             println!("req: {:?}", header);
-            let mut data = vec![0; header.data_len.get() as usize];
+            let mut data = vec![0; header.data_length.get() as usize];
             socket.read_exact(&mut data).unwrap();
 
             if opts.no_reply {
                 return;
             }
 
-            let (reply_data, error) = match header.cmd.get() {
+            let (reply_data, error) = match header.command.get() {
                 1 => self.do_devinfo(&data),
                 2 => self.do_read(&data),
                 3 => self.do_write(&data),
@@ -118,19 +119,19 @@ impl Server {
 
             let mut reply_header = AdsHeader::default();
             if opts.garbage_header {
-                reply_header.pad = 234;
+                reply_header.padding = 234;
             }
-            reply_header.len.set(32 + reply_data.len() as u32);
-            reply_header.dst_addr = header.src_addr;
-            reply_header.dst_port = header.src_port;
-            reply_header.src_addr = header.dst_addr;
-            reply_header.src_port = header.dst_port;
-            reply_header.cmd = header.cmd;
-            reply_header.state.set(header.state.get() | 1);
-            reply_header.data_len.set(reply_data.len() as u32);
-            reply_header.error.set(error);
+            reply_header.length.set(32 + reply_data.len() as u32);
+            reply_header.dest_netid = header.src_netid;
+            reply_header.dest_port = header.src_port;
+            reply_header.src_netid = header.dest_netid;
+            reply_header.src_port = header.dest_port;
+            reply_header.command = header.command;
+            reply_header.state_flags.set(header.state_flags.get() | 1);
+            reply_header.data_length.set(reply_data.len() as u32);
+            reply_header.error_code.set(error);
             if !opts.ignore_invokeid {
-                reply_header.inv_id = header.inv_id;
+                reply_header.invoke_id = header.invoke_id;
             }
             println!("rep: {:?}", reply_header);
 
@@ -141,9 +142,9 @@ impl Server {
 
     fn send_notification(&self, off: usize, len: usize, header: &AdsHeader,
                          bad: bool, socket: &mut TcpStream) {
-        let data_len = std::mem::size_of::<NotifHdr>() + len;
+        let data_len = std::mem::size_of::<SingleNotification>() + len;
 
-        let mut notif_header = NotifHdr::default();
+        let mut notif_header = SingleNotification::default();
         notif_header.len.set(data_len as u32 - 4);
         notif_header.stamps.set(if bad { u32::MAX } else { 1 });
         notif_header.stamp.set(0x9988776655443322);
@@ -152,14 +153,14 @@ impl Server {
         notif_header.size.set(len as u32);
 
         let mut ads_header = AdsHeader::default();
-        ads_header.len.set(32 + data_len as u32);
-        ads_header.dst_addr = header.src_addr;
-        ads_header.dst_port = header.src_port;
-        ads_header.src_addr = header.dst_addr;
-        ads_header.src_port = header.dst_port;
-        ads_header.cmd.set(crate::client::Command::Notification as u16);
-        ads_header.state.set(4);
-        ads_header.data_len.set(data_len as u32);
+        ads_header.length.set(32 + data_len as u32);
+        ads_header.dest_netid = header.src_netid;
+        ads_header.dest_port = header.src_port;
+        ads_header.src_netid = header.dest_netid;
+        ads_header.src_port = header.dest_port;
+        ads_header.command.set(crate::client::Command::Notification as u16);
+        ads_header.state_flags.set(4);
+        ads_header.data_length.set(data_len as u32);
         println!("not: {:?}", ads_header);
 
         socket.write_all(ads_header.as_bytes()).unwrap();
@@ -210,59 +211,59 @@ impl Server {
     }
 
     fn do_read(&self, data: &[u8]) -> (Vec<u8>, u32) {
-        if data.len() != size_of::<IndexLen>() {
+        if data.len() != size_of::<IndexLength>() {
             return (vec![], 0x706);
         }
         // TODO: when using zerocopy > 0.3, replace by `read_from`.
-        let mut request = IndexLen::default();
+        let mut request = IndexLength::default();
         request.as_bytes_mut().copy_from_slice(data);
-        let mut off = request.ioff.get() as usize;
-        let len = request.len.get() as usize;
+        let mut off = request.index_offset.get() as usize;
+        let len = request.length.get() as usize;
         let mut out = Vec::new();
         out.write_u32::<LE>(0).unwrap();
         // Simulate symbol access.
-        if request.igrp.get() == index::RW_SYMVAL_BYHANDLE {
+        if request.index_group.get() == index::RW_SYMVAL_BYHANDLE {
             if off != 77 {
                 return (vec![], 0x710);
             }
             off = 1020; // symbol lives at the end of self.data
-        } else if request.igrp.get() != index::PLC_RW_M {
+        } else if request.index_group.get() != index::PLC_RW_M {
             return (vec![], 0x702);
         }
         if off + len > self.data.len() {
             return (vec![], 0x703);
         }
-        out.write_u32::<LE>(request.len.get()).unwrap();
+        out.write_u32::<LE>(request.length.get()).unwrap();
         out.extend(&self.data[off..][..len]);
         (out, 0)
     }
 
     fn do_write(&mut self, data: &[u8]) -> (Vec<u8>, u32) {
-        if data.len() < size_of::<IndexLen>() {
+        if data.len() < size_of::<IndexLength>() {
             return (vec![], 0x706);
         }
-        let mut request = IndexLen::default();
+        let mut request = IndexLength::default();
         request.as_bytes_mut().copy_from_slice(&data[..12]);
-        let mut off = request.ioff.get() as usize;
-        let len = request.len.get() as usize;
+        let mut off = request.index_offset.get() as usize;
+        let len = request.length.get() as usize;
 
-        if request.igrp.get() == index::RW_SYMVAL_BYHANDLE {
+        if request.index_group.get() == index::RW_SYMVAL_BYHANDLE {
             if off != 77 {
                 return (vec![], 0x710);
             }
             off = 1020;
-        } else if request.igrp.get() == index::RELEASE_SYMHANDLE {
+        } else if request.index_group.get() == index::RELEASE_SYMHANDLE {
             if off != 77 {
                 return (vec![], 0x710);
             }
             return (0u32.to_le_bytes().into(), 0);
-        } else if request.igrp.get() != index::PLC_RW_M {
+        } else if request.index_group.get() != index::PLC_RW_M {
             return (vec![], 0x702);
         }
         if off + len > self.data.len() {
             return (vec![], 0x703);
         }
-        if data.len() != size_of::<IndexLen>() + len {
+        if data.len() != size_of::<IndexLength>() + len {
             return (vec![], 0x706);
         }
         self.data[off..][..len].copy_from_slice(&data[12..]);
@@ -270,18 +271,18 @@ impl Server {
     }
 
     fn do_read_write(&mut self, data: &[u8]) -> (Vec<u8>, u32) {
-        if data.len() < size_of::<Index2Len>() {
+        if data.len() < size_of::<IndexLengthRW>() {
             return (vec![], 0x706);
         }
-        let mut request = Index2Len::default();
+        let mut request = IndexLengthRW::default();
         request.as_bytes_mut().copy_from_slice(&data[..16]);
-        let off = request.ioff.get();
-        let rlen = request.rlen.get() as usize;
-        let wlen = request.wlen.get() as usize;
+        let off = request.index_offset.get();
+        let rlen = request.read_length.get() as usize;
+        let wlen = request.write_length.get() as usize;
         let mut out = 0u32.to_le_bytes().to_vec();
 
         // Simulate file and symbol access.
-        match request.igrp.get() {
+        match request.index_group.get() {
             index::FILE_OPEN => {
                 if &data[16..] != b"/etc/passwd" {
                     return (vec![], 0x70C);
@@ -351,10 +352,10 @@ impl Server {
         }
         let mut request = AddNotif::default();
         request.as_bytes_mut().copy_from_slice(data);
-        let off = request.ioff.get() as usize;
-        let len = request.len.get() as usize;
+        let off = request.index_offset.get() as usize;
+        let len = request.length.get() as usize;
 
-        if request.igrp.get() != index::PLC_RW_M {
+        if request.index_group.get() != index::PLC_RW_M {
             return (vec![], 0x702);
         }
         if off + len > self.data.len() {
@@ -384,52 +385,7 @@ impl Server {
 
 #[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
-struct AdsHeader {
-    pad:      u16,
-    len:      U32<LE>,
-    dst_addr: [u8; 6],
-    dst_port: U16<LE>,
-    src_addr: [u8; 6],
-    src_port: U16<LE>,
-    cmd:      U16<LE>,
-    state:    U16<LE>,
-    data_len: U32<LE>,
-    error:    U32<LE>,
-    inv_id:   U32<LE>,
-}
-
-#[derive(AsBytes, FromBytes, Debug, Default)]
-#[repr(C)]
-struct IndexLen {
-    igrp: U32<LE>,
-    ioff: U32<LE>,
-    len:  U32<LE>,
-}
-
-#[derive(AsBytes, FromBytes, Debug, Default)]
-#[repr(C)]
-struct Index2Len {
-    igrp: U32<LE>,
-    ioff: U32<LE>,
-    rlen: U32<LE>,
-    wlen: U32<LE>,
-}
-
-#[derive(AsBytes, FromBytes, Debug, Default)]
-#[repr(C)]
-struct AddNotif {
-    igrp:  U32<LE>,
-    ioff:  U32<LE>,
-    len:   U32<LE>,
-    mode:  U32<LE>,
-    delay: U32<LE>,
-    cycle: U32<LE>,
-    resvd: [u8; 16],
-}
-
-#[derive(AsBytes, FromBytes, Debug, Default)]
-#[repr(C)]
-struct NotifHdr {
+struct SingleNotification {
     len:     U32<LE>,
     stamps:  U32<LE>,
     stamp:   U64<LE>,

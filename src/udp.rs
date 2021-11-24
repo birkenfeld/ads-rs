@@ -6,6 +6,8 @@ use std::net::{ToSocketAddrs, UdpSocket};
 use std::str;
 
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
+use zerocopy::byteorder::{U16, U32};
+use zerocopy::{AsBytes, FromBytes};
 
 use crate::errors::ErrContext;
 use crate::{AmsAddr, AmsNetId, Error, Result};
@@ -49,12 +51,15 @@ pub enum Tag {
 impl Message {
     /// Create a new UDP message backed by a byte vector.
     pub fn new(service: ServiceId, source: AmsAddr) -> Self {
-        let mut data = Vec::with_capacity(100);
-        for &n in &[BECKHOFF_UDP_MAGIC, 0, service as u32] {
-            data.write_u32::<LE>(n).expect("vec");
-        }
-        source.write_to(&mut data).expect("vec");
-        data.write_u32::<LE>(0).expect("vec");  // number of items, will be increased later
+        let header = UdpHeader {
+            magic:     U32::new(BECKHOFF_UDP_MAGIC),
+            invoke_id: U32::new(0),
+            service:   U32::new(service as u32),
+            src_netid: source.netid(),
+            src_port:  U16::new(source.port()),
+            num_items: U32::new(0),  // will be adapted later
+        };
+        let data = header.as_bytes().to_vec();
         Self { items: Vec::with_capacity(8), data }
     }
 
@@ -71,6 +76,7 @@ impl Message {
     }
 
     fn parse_internal(data: &[u8], exp_service: u32) -> Result<Self> {
+        // TODO: use read_from with zerocopy 0.6
         let mut data_ptr = data;
         let magic = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
         let invoke_id = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
@@ -248,8 +254,13 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
         (0, 0, 0)
     };
 
+    // Parse OS version.  This is a Windows OSVERSIONINFO structure, which
+    // consists of major/minor/build versions, the platform, and a "service
+    // pack" string, coded as UTF-16.  It is not known how the data looks on
+    // non-Windows devices, but hopefully the format is kept the same.
     let os_version = if let Some(mut bytes) = reply.get_bytes(Tag::OSVersion) {
         if bytes.len() >= 22 {
+            // Size of the structure (redundant).
             let _ = bytes.read_u32::<LE>().expect("size");
             let major = bytes.read_u32::<LE>().expect("size");
             let minor = bytes.read_u32::<LE>().expect("size");
@@ -280,4 +291,15 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
         twincat_version,
         os_version,
     })
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
+pub(crate) struct UdpHeader {
+    magic:     U32<LE>,
+    invoke_id: U32<LE>,
+    service:   U32<LE>,
+    src_netid: AmsNetId,
+    src_port:  U16<LE>,
+    num_items: U32<LE>,
 }
