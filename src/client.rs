@@ -151,6 +151,8 @@ impl Client {
     /// clients should make sure to replicate this behavior, as opening a second
     /// connection will close the first.
     pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Option<AmsAddr>) -> Result<Self> {
+        // Connect, taking the timeout into account.  Unfortunately
+        // connect_timeout wants a single SocketAddr.
         let addr = addr.to_socket_addrs().ctx("converting address to SocketAddr")?
                                          .next().expect("at least one SocketAddr");
         let socket = if let Some(timeout) = timeouts.connect {
@@ -158,8 +160,15 @@ impl Client {
         } else {
             TcpStream::connect(&addr).ctx("connecting TCP socket")?
         };
+
+        // Disable Nagle to ensure small requests are sent promptly; we're
+        // playing ping-pong with request reply, so no pipelining.
         socket.set_nodelay(true).ctx("setting NODELAY")?;
         socket.set_write_timeout(timeouts.write).ctx("setting write timeout")?;
+
+        // Determine our source AMS address.  If it's not specified, try to use
+        // the socket's local IPv4 address, if it's IPv6 (not sure if Beckhoff
+        // devices support that) use `127.0.0.1` as the last resort.
         let source = match source {
             Some(id) => id,
             None => {
@@ -173,12 +182,17 @@ impl Client {
                 }
             }
         };
+
+        // Clone the socket for the reader thread and create our channels for
+        // bidirectional communication.
         let socket_clone = socket.try_clone().ctx("cloning TCP socket")?;
         let (buf_send, buf_recv) = bounded(10);
         let (reply_send, reply_recv) = bounded(1);
         let (notif_send, notif_recv) = unbounded();
         let mut source_bytes = [0; 8];
         source.write_to(&mut &mut source_bytes[..]).expect("size");
+
+        // Start the reader thread.
         let reader = Reader {
             socket: socket_clone,
             source: source_bytes,
@@ -187,6 +201,7 @@ impl Client {
             notif_send,
         };
         std::thread::spawn(|| reader.run());
+
         Ok(Client {
             socket,
             source,
@@ -217,21 +232,29 @@ impl Client {
 
     /// Low-level function to execute an ADS command.
     ///
-    /// Writes a data from a number of input buffers, and returns data in
-    /// a number of output buffers.
+    /// Writes a data from a number of input buffers, and returns data in a
+    /// number of output buffers.  The latter might not be filled completely;
+    /// the return value specifies the number of total valid bytes.  It is up to
+    /// the caller to determine what this means in terms of the passed buffers.
     pub fn communicate(&self,
                        cmd: Command,
                        target: AmsAddr,
+                       min_len_out: usize,
                        data_in: &[&[u8]],
                        data_out: &mut [&mut [u8]]) -> Result<usize> {
+        // Increase the invoke ID.  We could also generate a random u32, but
+        // this way the sequence of packets can be tracked.
         self.invoke_id.set(self.invoke_id.get().wrapping_add(1));
-        let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
-        let mut request = Vec::with_capacity(HEADER_SIZE + data_in_len);
 
-        // Fill the outgoing header.
-        // first two bytes are always 0
+        // The data we send is the sum of all data_in buffers.
+        let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
+
+        // Create the outgoing header.  Note, allocating a Vec and calling
+        // `socket.write_all` only once is faster than writing in multiple
+        // steps, even with TCP_NODELAY.
+        let mut request = Vec::with_capacity(HEADER_SIZE + data_in_len);
         let rest_len = (AMS_HEADER_SIZE + data_in_len).try_into()?;
-        request.write_u16::<LE>(0).expect("vec");                   // initial padding
+        request.write_u16::<LE>(0).expect("vec");                   // initial padding (always 0)
         request.write_u32::<LE>(rest_len).expect("vec");            // length of rest of message
         target.write_to(&mut request).expect("vec");                // dest netid+port
         self.source.write_to(&mut request).expect("vec");           // source netid+port
@@ -241,10 +264,11 @@ impl Client {
         request.write_u32::<LE>(0).expect("vec");                   // error, always 0 when sending
         request.write_u32::<LE>(self.invoke_id.get()).expect("vec"); // invoke ID
 
-        // Write the outgoing header and user data.
+        // Add the outgoing user data.
         for buf in data_in {
             request.extend_from_slice(buf);
         }
+        // &T impls Write for T: Write, so no &mut self required.
         (&self.socket).write_all(&request).ctx("sending request")?;
 
         // Get a reply from the reader thread, with timeout or not.
@@ -298,9 +322,17 @@ impl Client {
             return ads_error(cmd.action(), result);
         }
 
+        // Check returned length against what the caller wants.  This also ensures that
+        // we had a result field.
+        if (data_len as usize) < min_len_out + 4 {
+            return Err(Error::Reply(cmd.action(), "got less data than expected", data_len));
+        }
+
+        // The pure user data length, without the result field.
         let data_len = data_len as usize - 4;
 
-        // Distribute the data into the user output buffers.
+        // Distribute the data into the user output buffers, up to the returned
+        // data length.
         let mut offset = HEADER_SIZE + 4;
         let mut rest_len = data_len;
         for buf in data_out {
@@ -344,11 +376,12 @@ impl Reader {
             // Get a buffer from the free-channel or create a new one.
             let mut buf = self.buf_recv.try_recv()
                                        .unwrap_or_else(|_| Vec::with_capacity(DEFAULT_BUFFER_SIZE));
-            buf.resize(HEADER_SIZE, 0);
 
             // Read a header from the socket.
+            buf.resize(HEADER_SIZE, 0);
             if self.socket.read_exact(&mut buf).ctx("reading packet header").is_err() {
-                // Not sending an error back; we don't know if something was requested.
+                // Not sending an error back; we don't know if something was
+                // requested or the socket was just closed from either side.
                 return;
             }
 
@@ -358,7 +391,8 @@ impl Reader {
 
             // First two bytes must be zero, and the two length fields must agree.
             if buf[..2] != [0, 0] || rest_length != packet_length - AMS_HEADER_SIZE {
-                let _ = self.reply_send.send(Err(Error::Reply("reading packet", "inconsistent packet", 0)));
+                let _ = self.reply_send.send(Err(Error::Reply("reading packet",
+                                                              "inconsistent packet", 0)));
                 return;
             }
 
@@ -412,7 +446,10 @@ impl<'c> Device<'c> {
     /// Read the device's name + version.
     pub fn get_info(&self) -> Result<DeviceInfo> {
         let mut data = [0; 20];
-        self.client.communicate(Command::DevInfo, self.addr, &[], &mut [&mut data])?;
+        self.client.communicate(Command::DevInfo, self.addr, data.len(), &[], &mut [&mut data])?;
+
+        // Decode the name string, which is null-terminated.  Technically it's
+        // Windows-1252, but in practice no non-ASCII occurs.
         let name = data[4..].iter().take_while(|&&ch| ch > 0)
                                    .map(|&ch| ch as char).collect::<String>();
         Ok(DeviceInfo {
@@ -427,15 +464,17 @@ impl<'c> Device<'c> {
     pub fn read(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<usize> {
         let mut header = [0; 12];
         LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
-        let mut len = [0; 4];
-        self.client.communicate(Command::Read, self.addr, &[&header], &mut [&mut len, data])?;
-        Ok(u32::from_le_bytes(len) as usize)
+        let mut read_len = [0; 4];
+        self.client.communicate(Command::Read, self.addr, read_len.len(),
+                                &[&header], &mut [&mut read_len, data])?;
+        Ok(u32::from_le_bytes(read_len) as usize)
     }
 
     /// Read some data at a given index group/offset.
     pub fn read_exact(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<()> {
-        if self.read(index_group, index_offset, data)? != data.len() {
-            return Err(Error::Reply("read data", "got less data than expected", data.len() as u32));
+        let len = self.read(index_group, index_offset, data)?;
+        if len != data.len() {
+            return Err(Error::Reply("read data", "got less data than expected", len as u32));
         }
         Ok(())
     }
@@ -444,7 +483,7 @@ impl<'c> Device<'c> {
     pub fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
         let mut header = [0; 12];
         LE::write_u32_into(&[index_group, index_offset, data.len().try_into()?], &mut header);
-        self.client.communicate(Command::Write, self.addr, &[&header, data], &mut [])?;
+        self.client.communicate(Command::Write, self.addr, 0, &[&header, data], &mut [])?;
         Ok(())
     }
 
@@ -456,16 +495,17 @@ impl<'c> Device<'c> {
         let mut header = [0; 16];
         LE::write_u32_into(&[index_group, index_offset,
                              read_data.len().try_into()?, write_data.len().try_into()?], &mut header);
-        let mut len = [0; 4];
-        self.client.communicate(Command::ReadWrite, self.addr,
-                                &[&header, write_data], &mut [&mut len, read_data])?;
-        Ok(u32::from_le_bytes(len) as usize)
+        let mut read_len = [0; 4];
+        self.client.communicate(Command::ReadWrite, self.addr, read_len.len(),
+                                &[&header, write_data], &mut [&mut read_len, read_data])?;
+        Ok(u32::from_le_bytes(read_len) as usize)
     }
 
     /// Return the ADS and device state of the device.
     pub fn get_state(&self) -> Result<(AdsState, u16)> {
         let mut data = [0; 4];
-        self.client.communicate(Command::ReadState, self.addr, &[], &mut [&mut data])?;
+        self.client.communicate(Command::ReadState, self.addr, data.len(), &[], &mut [&mut data])?;
+
         let state_const = LE::read_u16(&data);
         Ok((AdsState::try_from(state_const)
             .map_err(|e| Error::Reply("read state", e, state_const.into()))?,
@@ -476,7 +516,7 @@ impl<'c> Device<'c> {
     pub fn write_control(&self, ads_state: AdsState, dev_state: u16) -> Result<()> {
         let mut data = [0; 8];
         LE::write_u16_into(&[ads_state as u16, dev_state], &mut data[..4]);
-        self.client.communicate(Command::WriteControl, self.addr, &[&data], &mut [])?;
+        self.client.communicate(Command::WriteControl, self.addr, 0, &[&data], &mut [])?;
         Ok(())
     }
 
@@ -500,7 +540,7 @@ impl<'c> Device<'c> {
                            // final 16 bytes are reserved
                            &mut data[0..24]);
         let mut handle = [0; 4];
-        self.client.communicate(Command::AddNotification, self.addr,
+        self.client.communicate(Command::AddNotification, self.addr, handle.len(),
                                 &[&data], &mut [&mut handle])?;
         let handle = u32::from_le_bytes(handle);
         self.client.notif_handles.borrow_mut().insert((self.addr, handle));
@@ -510,7 +550,8 @@ impl<'c> Device<'c> {
     /// Delete a notification with given handle.
     pub fn delete_notification(&self, handle: notif::Handle) -> Result<()> {
         let data = handle.to_le_bytes();
-        self.client.communicate(Command::DeleteNotification, self.addr, &[&data], &mut [])?;
+        self.client.communicate(Command::DeleteNotification, self.addr, 0,
+                                &[&data], &mut [])?;
         self.client.notif_handles.borrow_mut().remove(&(self.addr, handle));
         Ok(())
     }
