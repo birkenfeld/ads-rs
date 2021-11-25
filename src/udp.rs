@@ -3,7 +3,7 @@
 use std::convert::TryInto;
 use std::io::Write;
 use std::net::{ToSocketAddrs, UdpSocket};
-use std::str;
+use std::{char, iter, str};
 
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use zerocopy::byteorder::{U16, U32};
@@ -266,18 +266,18 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             let minor = bytes.read_u32::<LE>().expect("size");
             let build = bytes.read_u32::<LE>().expect("size");
             let platform = match bytes.read_u32::<LE>().expect("size") {
-                1 => "Windows 9x",
+                1 => "TC/RTOS",
                 2 => "Windows NT",
                 3 => "Windows CE",
                 _ => "Unknown platform",
             };
-            let mut string = String::new();
-            while let Ok(ch) = bytes.read_u16::<LE>() {
-                if ch == 0 {
-                    break;
-                }
-                string.push(std::char::from_u32(ch.into()).expect("size"));
-            }
+            let string = if platform == "TC/RTOS" {
+                bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
+            } else {
+                iter::from_fn(|| bytes.read_u16::<LE>().ok())
+                    .take_while(|&ch| ch != 0)
+                    .filter_map(|ch| char::from_u32(ch as u32)).collect()
+            };
             (platform, major, minor, build, string)
         } else {
             ("Unknown OS info format", 0, 0, 0, "".into())
