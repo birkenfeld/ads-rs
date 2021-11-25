@@ -224,7 +224,7 @@ struct Target {
     amsport: Option<ads::AmsPort>,
 }
 
-const RX: &str = "(?P<host>[^:/]+)(:(?P<port>\\d+))?(/(?P<netid>[0-9.]+)(:(?P<amsport>\\d+))?)?$";
+const RX: &str = "^(?P<host>[^:/]+)(:(?P<port>\\d+))?(/(?P<netid>[0-9.]+)?(:(?P<amsport>\\d+))?)?$";
 
 impl FromStr for Target {
     type Err = &'static str;
