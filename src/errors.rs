@@ -11,7 +11,7 @@ pub enum Error {
     Io(&'static str, std::io::Error),
 
     /// The ADS server responded with an error code.
-    #[error("{0}: {1} ({2})")]
+    #[error("{0}: {1} ({2:#x})")]
     Ads(&'static str, &'static str, u32),
 
     /// An unexpected or inconsistent reply was received.
