@@ -4,6 +4,7 @@ use std::convert::TryInto;
 use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
+use itertools::Itertools;
 use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
 use strum::EnumString;
@@ -134,7 +135,7 @@ enum RawAction {
         /// the data type
         #[structopt(long, group = "spec")]
         r#type: Option<VarType>,
-        /// whether to print integers as hex
+        /// whether to print integers as hex, or raw data as hexdump
         #[structopt(long)]
         hex: bool,
     },
@@ -162,7 +163,7 @@ enum RawAction {
         /// the data type to interpret the read data as
         #[structopt(long, group = "spec")]
         r#type: Option<VarType>,
-        /// whether to print integers as hex
+        /// whether to print integers as hex, or raw data as hexdump
         #[structopt(long)]
         hex: bool,
     },
@@ -364,7 +365,11 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     if let Some(length) = length {
                         let mut read_data = vec![0; length];
                         dev.read(index_group, index_offset, &mut read_data)?;
-                        stdout().write_all(&read_data)?;
+                        if hex {
+                            hexdump(&read_data);
+                        } else {
+                            stdout().write_all(&read_data)?;
+                        }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
                         dev.read(index_group, index_offset, &mut read_data)?;
@@ -382,7 +387,11 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     if let Some(length) = length {
                         let mut read_data = vec![0; length];
                         dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
-                        stdout().write_all(&read_data)?;
+                        if hex {
+                            hexdump(&read_data);
+                        } else {
+                            stdout().write_all(&read_data)?;
+                        }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
                         dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
@@ -480,4 +489,24 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
     } else {
         println!("{}", value);
     }
+}
+
+/// If the char is not printable, replace it by a dot.
+fn printable(ch: &u8) -> char {
+    if *ch >= 32 && *ch <= 127 { *ch as char } else { '.' }
+}
+
+/// Print a hexdump of a byte slice in the usual format.
+pub fn hexdump(mut data: &[u8]) {
+    let mut addr = 0;
+    while !data.is_empty() {
+        let (line, rest) = data.split_at(data.len().min(16));
+        println!("{:#08x}: {:02x}{} | {}", addr,
+                 line.iter().format(" "),
+                 (0..16 - line.len()).map(|_| "   ").format(""),
+                 line.iter().map(printable).format(""));
+        addr += 16;
+        data = rest;
+    }
+    println!();
 }
