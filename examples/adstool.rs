@@ -41,6 +41,7 @@ enum Cmd {
     Addroute(AddRouteArgs),
     File(FileAction),
     License(LicenseAction),
+    /// Query information about the system over UDP.
     Info,
     State(StateArgs),
     Raw(RawAction),
@@ -286,6 +287,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
             println!("OS version: {} {}.{}.{} {}",
                      info.os_version.0, info.os_version.1, info.os_version.2,
                      info.os_version.3, info.os_version.4);
+            if !info.fingerprint.is_empty() {
+                println!("Fingerprint: {}", info.fingerprint);
+            }
         }
         Cmd::File(subargs) => {
             use ads::file;

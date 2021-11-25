@@ -45,7 +45,7 @@ pub enum Tag {
     Options = 9,
     RouteName = 12,
     UserName = 13,
-    // ? = 18  sent in reply to Identify, could be an SHA-256
+    Fingerprint = 18,
 }
 
 impl Message {
@@ -238,12 +238,14 @@ pub struct SysInfo {
     pub twincat_version: (u8, u8, u16),
     /// The OS (name, major, minor, build, service_pack) version.
     pub os_version: (&'static str, u32, u32, u32, String),
+    /// The system's fingerprint.
+    pub fingerprint: String,
 }
 
 /// Send a UDP message for querying remote system information.
 pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
-    let packet = Message::new(ServiceId::Identify, AmsAddr::default());
-    let reply = packet.send_receive(target)?;
+    let request = Message::new(ServiceId::Identify, AmsAddr::default());
+    let reply = request.send_receive(target)?;
 
     // Parse TwinCAT version.
     let tcver = reply.get_bytes(Tag::TCVersion).unwrap_or(&[]);
@@ -290,6 +292,7 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
         hostname: reply.get_str(Tag::ComputerName).unwrap_or("unknown").into(),
         twincat_version,
         os_version,
+        fingerprint: reply.get_str(Tag::Fingerprint).unwrap_or("").into(),
     })
 }
 
