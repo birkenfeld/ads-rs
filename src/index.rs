@@ -97,6 +97,16 @@ pub const FILE_READ: u32 = 122;
 pub const FILE_WRITE: u32 = 123;
 /// File service: delete a file.
 pub const FILE_DELETE: u32 = 131;
+/// File service: browse files.
+pub const FILE_BROWSE: u32 = 133;
 
 /// Index group for license queries.
 pub const LICENSE: u32 = 0x0101_0004;
+
+// Diverse officially undocumented ports, used with the system service.
+pub const WIN_REGISTRY: u32 = 200;
+pub const EXECUTE: u32 = 500;
+pub const TC_TARGET_XML: u32 = 700;
+pub const ROUTE_ADD: u32 = 801;
+pub const ROUTE_REMOVE: u32 = 802;
+pub const ROUTE_LIST: u32 = 803;
