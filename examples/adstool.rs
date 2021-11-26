@@ -170,14 +170,19 @@ enum RawAction {
 }
 
 #[derive(StructOpt, Debug)]
+#[structopt(group = ArgGroup::with_name("spec").required(true))]
 /// Variable read or write access.
 struct VarArgs {
-    /// the variable type
-    r#type: VarType,
     /// the variable name
     name: String,
     /// the new value, if given, to write
     value: Option<String>,
+    /// the variable type
+    #[structopt(long, group = "spec")]
+    r#type: Option<VarType>,
+    /// the length to read, can be 0xABCD
+    #[structopt(long, group = "spec")]
+    length: Option<usize>,
     /// whether to print integers as hex
     #[structopt(long)]
     hex: bool,
@@ -411,12 +416,23 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
             // Write or read data?
             if let Some(value) = subargs.value {
-                let write_data = get_write_value(typ, value)?;
+                // TODO
+                let write_data = get_write_value(typ.unwrap(), value)?;
                 handle.write(&write_data)?;
             } else {
-                let mut read_data = vec![0; typ.size()];
-                handle.read(&mut read_data)?;
-                print_read_value(typ, &read_data, subargs.hex);
+                if let Some(length) = subargs.length {
+                    let mut read_data = vec![0; length];
+                    handle.read(&mut read_data)?;
+                    if subargs.hex {
+                        hexdump(&read_data);
+                    } else {
+                        stdout().write_all(&read_data)?;
+                    }
+                } else if let Some(typ) = subargs.r#type {
+                    let mut read_data = vec![0; typ.size()];
+                    handle.read(&mut read_data)?;
+                    print_read_value(typ, &read_data, subargs.hex);
+                }
             }
         }
     }
