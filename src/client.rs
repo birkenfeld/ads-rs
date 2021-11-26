@@ -280,10 +280,10 @@ impl Client {
         // Get a reply from the reader thread, with timeout or not.
         let reply = if let Some(tmo) = self.read_timeout {
             self.reply_recv.recv_timeout(tmo).map_err(|_| io::ErrorKind::TimedOut.into())
-                                             .ctx("receiving reply from channel")?
+                                             .ctx("receiving reply (route set?)")?
         } else {
             self.reply_recv.recv().map_err(|_| io::ErrorKind::UnexpectedEof.into())
-                                  .ctx("receiving reply from channel")?
+                                  .ctx("receiving reply (route set?)")?
         }?;
 
         // Validate the incoming reply.  The reader thread already made sure that
