@@ -49,8 +49,7 @@ enum Cmd {
     State(StateArgs),
     Raw(RawAction),
     Var(VarArgs),
-    /// Query info about symbols and their types.
-    Syminfo,
+    Syminfo(SyminfoArgs),
 }
 
 #[derive(StructOpt, Debug)]
@@ -196,6 +195,14 @@ struct VarArgs {
     #[structopt(long)]
     hex: bool,
 }
+
+#[derive(StructOpt, Debug)]
+/// Query info about symbols and their types.
+struct SyminfoArgs {
+    /// a filter for the returned symbols
+    filter: Option<String>,
+}
+
 
 #[derive(Clone, Copy, Debug, EnumString)]
 #[strum(serialize_all = "UPPERCASE")]
@@ -459,7 +466,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
             }
         }
-        Cmd::Syminfo => {
+        Cmd::Syminfo(subargs) => {
             // Connect to the selected target, defaulting to the first PLC instance.
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
             let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
@@ -493,10 +500,14 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
             }
 
+            let filter = subargs.filter.unwrap_or("".into()).to_lowercase().to_string();
+
             for sym in symbols {
-                println!("{:4x}:{:6x} ({:6x}) {:40} {}",
-                         sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
-                print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
+                if sym.name.to_lowercase().contains(&filter) {
+                    println!("{:4x}:{:6x} ({:6x}) {:40} {}",
+                             sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
+                    print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
+                }
             }
         }
     }
