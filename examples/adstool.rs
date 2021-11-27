@@ -435,8 +435,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        let nread = dev.write_read_exact(index_group, index_offset,
-                                                         &write_data, &mut read_data)?;
+                        dev.write_read_exact(index_group, index_offset,
+                                             &write_data, &mut read_data)?;
                         print_read_value(typ, &read_data, hex);
                     }
                 }
@@ -497,7 +497,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     } else {
                         let length = match length {
                             Some(l) => l,
-                            None => ads::symbol::Handle::get_size(dev, &name)?
+                            None => ads::symbol::get_size(dev, &name)?
                         };
                         let mut read_data = vec![0; length];
                         handle.read(&mut read_data)?;
