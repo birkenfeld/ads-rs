@@ -2,6 +2,7 @@
 
 use std::io;
 
+use byteorder::{ByteOrder, LE};
 use crate::index;
 use crate::{Device, Error, Result};
 
@@ -28,6 +29,41 @@ impl<'c> File<'c> {
     /// Delete a file.  `flags` must be combined from the constants in this module.
     pub fn delete(device: Device, filename: impl AsRef<[u8]>, flags: u32) -> Result<()> {
         device.write_read(index::FILE_DELETE, flags, filename.as_ref(), &mut []).map(drop)
+    }
+
+    /// Return a list of files in the named directory.
+    ///
+    /// Returned tuples are (name, attributes, size).  Returned filenames are not String
+    /// since they are likely encoded in Windows-1252.
+    pub fn listdir(device: Device, dirname: impl AsRef<[u8]>)
+         -> Result<Vec<(Vec<u8>, u32, u64)>>
+    {
+        let mut files = Vec::new();
+        let mut buf = [0; 324];
+        // Initial offset.  Offset 4 would start at the TwinCAT Boot directory instead.
+        let mut offset = 1;
+        // Initial argument, should be empty in later calls.
+        let mut argument = dirname.as_ref().to_vec();
+        argument.extend(b"\\*.*");
+
+        loop {
+            match device.write_read(index::FILE_BROWSE, offset, &argument, &mut buf) {
+                Ok(324) => {
+                    let attrs = LE::read_u32(&buf[4..8]);
+                    let sizeh = LE::read_u32(&buf[32..36]);
+                    let sizel = LE::read_u32(&buf[36..40]);
+                    let size = (sizeh as u64) << 32 | sizel as u64;
+                    let name = buf[48..].iter().copied().take_while(|&b| b != 0).collect();
+                    files.push((name, attrs, size));
+                }
+                Ok(n) => return Err(Error::Reply("list files", "expecting more data", n as u32)),
+                // Error "not found" means the end of the list.
+                Err(Error::Ads(_, _, 0x70c)) => return Ok(files),
+                Err(e) => return Err(e),
+            }
+            offset = LE::read_u32(&buf[..4]);
+            argument.clear();
+        }
     }
 }
 
@@ -87,3 +123,7 @@ pub const ENABLE_DIR: u32 = 1 << 7;
 pub const OVERWRITE: u32 = 1 << 8;
 /// Unknown.
 pub const OVERWRITE_RENAME: u32 = 1 << 9;
+
+
+/// File attribute bit for directories.
+pub const DIRECTORY: u32 = 0x10;

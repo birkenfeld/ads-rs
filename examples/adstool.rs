@@ -82,6 +82,11 @@ struct AddRouteArgs {
 #[derive(StructOpt, Debug)]
 /// Execute operations on files on the TwinCAT system.
 enum FileAction {
+    /// List remote files in the given directory.
+    List {
+        /// the directory path
+        path: String,
+    },
     /// Read a remote file and write its contents to stdout.
     Read {
         /// the file path
@@ -308,6 +313,14 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
             match subargs {
+                FileAction::List { path } => {
+                    let entries = file::File::listdir(dev, &path)?;
+                    for (name, attr, size) in entries {
+                        println!("{} {:8} {}", 
+                                 if attr & file::DIRECTORY != 0 { "D" } else { " " },
+                                 size, String::from_utf8_lossy(&name));
+                    }
+                }
                 FileAction::Read { path } => {
                     let mut file = file::File::open(dev, &path,
                                                     file::READ | file::BINARY | file::ENSURE_DIR)?;
