@@ -190,7 +190,7 @@ struct VarArgs {
     #[structopt(long, group = "spec")]
     r#type: Option<VarType>,
     /// the length to read, can be 0xABCD
-    #[structopt(long, group = "spec")]
+    #[structopt(long, parse(try_from_str = parse), group = "spec")]
     length: Option<usize>,
     /// whether to print integers as hex
     #[structopt(long)]
@@ -482,17 +482,21 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
             let (symbols, type_map) = decode_symbol_info(symbol_data, type_data);
 
+            fn print_fields(type_map: &HashMap<String, Type>, base_off: u32, typ: &str, level: usize) {
+                for field in &type_map[typ].fields {
+                    if let Some(offset) = field.offset {
+                        let indent = (0..2*level).map(|_| ' ').collect::<String>();
+                        println!("     {:6x} ({:6x}) {}.{:5$} {}",
+                                 base_off + offset, field.size, indent, field.name, field.typ, 39-2*level);
+                        print_fields(type_map, base_off + offset, &field.typ, level+1);
+                    }
+                }
+            }
+
             for sym in symbols {
                 println!("{:4x}:{:6x} ({:6x}) {:40} {}",
                          sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
-                let typ = &type_map[&sym.typ];
-                assert_eq!(typ.size, sym.size);
-                for field in &typ.fields {
-                    if let Some(offset) = field.offset {
-                        println!("     {:6x} ({:6x})   .{:37} {}",
-                                 sym.ix_offset + offset, field.size, field.name, field.typ);
-                    }
-                }
+                print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
             }
         }
     }
