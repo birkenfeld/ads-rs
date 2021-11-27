@@ -185,7 +185,7 @@ enum VarAction {
         filter: Option<String>,
     },
     /// Read a variable by name.
-    #[structopt(group = ArgGroup::with_name("spec").required(true))]
+    #[structopt(group = ArgGroup::with_name("spec"))]
     Read {
         /// the variable name
         name: String,
@@ -426,7 +426,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     stdin().read_to_end(&mut write_data)?;
                     if let Some(length) = length {
                         let mut read_data = vec![0; length];
-                        let nread = dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
+                        let nread = dev.write_read(index_group, index_offset,
+                                                   &write_data, &mut read_data)?;
                         if hex {
                             hexdump(&read_data[..nread]);
                         } else {
@@ -434,9 +435,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        let nread = dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
-                        // TODO
-                        assert!(nread == typ.size());
+                        let nread = dev.write_read_exact(index_group, index_offset,
+                                                         &write_data, &mut read_data)?;
                         print_read_value(typ, &read_data, hex);
                     }
                 }
@@ -490,7 +490,15 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
                 VarAction::Read { name, r#type, length, hex } => {
                     let handle = ads::symbol::Handle::new(dev, &name)?;
-                    if let Some(length) = length {
+                    if let Some(typ) = r#type {
+                        let mut read_data = vec![0; typ.size()];
+                        handle.read(&mut read_data)?;
+                        print_read_value(typ, &read_data, hex);
+                    } else {
+                        let length = match length {
+                            Some(l) => l,
+                            None => ads::symbol::Handle::get_size(dev, &name)?
+                        };
                         let mut read_data = vec![0; length];
                         handle.read(&mut read_data)?;
                         if hex {
@@ -498,10 +506,6 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         } else {
                             stdout().write_all(&read_data)?;
                         }
-                    } else if let Some(typ) = r#type {
-                        let mut read_data = vec![0; typ.size()];
-                        handle.read(&mut read_data)?;
-                        print_read_value(typ, &read_data, hex);
                     }
                 }
                 VarAction::Write { name, value, r#type } => {
