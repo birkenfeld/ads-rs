@@ -20,9 +20,9 @@ impl<'c> Handle<'c> {
         Ok(Self { device, handle: u32::from_le_bytes(handle_bytes) })
     }
 
-    /// Read data from the variable.
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        self.device.read(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
+    /// Read data from the variable (returned data must match size of buffer).
+    pub fn read(&self, buf: &mut [u8]) -> Result<()> {
+        self.device.read_exact(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
     }
 
     /// Write data to the variable.

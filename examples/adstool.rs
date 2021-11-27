@@ -1,9 +1,11 @@
 //! Reproduces the functionality of "adstool" from the Beckhoff ADS C++ library.
 
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
+use byteorder::{ByteOrder, LE, ReadBytesExt};
 use itertools::Itertools;
 use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
@@ -47,6 +49,8 @@ enum Cmd {
     State(StateArgs),
     Raw(RawAction),
     Var(VarArgs),
+    /// Query info about symbols and their types.
+    Syminfo,
 }
 
 #[derive(StructOpt, Debug)]
@@ -335,6 +339,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
         }
         Cmd::License(object) => {
+            // Connect to the selected target, defaulting to the license server.
             let amsport = target.amsport.unwrap_or(ads::ports::LICENSE_SERVER);
             let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
@@ -342,12 +347,12 @@ fn main_inner(args: Args) -> Result<(), Error> {
             match object {
                 LicenseAction::Platformid => {
                     let mut id = [0; 2];
-                    dev.read(ads::index::LICENSE, 2, &mut id)?;
+                    dev.read_exact(ads::index::LICENSE, 2, &mut id)?;
                     println!("{}", u16::from_le_bytes(id));
                 }
                 LicenseAction::Systemid => {
                     let mut id = [0; 16];
-                    dev.read(ads::index::LICENSE, 1, &mut id)?;
+                    dev.read_exact(ads::index::LICENSE, 1, &mut id)?;
                     println!("{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-\
                               {:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
                              id[3], id[2], id[1], id[0], id[5], id[4], id[7], id[6], id[8], id[9],
@@ -355,29 +360,31 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
                 LicenseAction::Volumeno => {
                     let mut no = [0; 4];
-                    dev.read(ads::index::LICENSE, 5, &mut no)?;
+                    dev.read_exact(ads::index::LICENSE, 5, &mut no)?;
                     println!("{}", u32::from_le_bytes(no));
                 }
             }
         }
         Cmd::Raw(subargs) => {
+            // Connect to the selected target, defaulting to the first PLC instance.
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
             let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
+
             match subargs {
                 RawAction::Read { index_group, index_offset, length, r#type, hex } => {
                     if let Some(length) = length {
                         let mut read_data = vec![0; length];
-                        dev.read(index_group, index_offset, &mut read_data)?;
+                        let nread = dev.read(index_group, index_offset, &mut read_data)?;
                         if hex {
-                            hexdump(&read_data);
+                            hexdump(&read_data[..nread]);
                         } else {
-                            stdout().write_all(&read_data)?;
+                            stdout().write_all(&read_data[..nread])?;
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        dev.read(index_group, index_offset, &mut read_data)?;
+                        dev.read_exact(index_group, index_offset, &mut read_data)?;
                         print_read_value(typ, &read_data, hex);
                     }
                 }
@@ -391,26 +398,30 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     stdin().read_to_end(&mut write_data)?;
                     if let Some(length) = length {
                         let mut read_data = vec![0; length];
-                        dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
+                        let nread = dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
                         if hex {
-                            hexdump(&read_data);
+                            hexdump(&read_data[..nread]);
                         } else {
-                            stdout().write_all(&read_data)?;
+                            stdout().write_all(&read_data[..nread])?;
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
+                        let nread = dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
+                        // TODO
+                        assert!(nread == typ.size());
                         print_read_value(typ, &read_data, hex);
                     }
                 }
             }
         }
         Cmd::Var(subargs) => {
-            // Connect to the selected target, defaulting to the first PLC instance
+            // Connect to the selected target, defaulting to the first PLC instance.
             let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
             let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
+
+            // Get a handle to the variable.
             let handle = ads::symbol::Handle::new(dev, &subargs.name)?;
             let typ = subargs.r#type;
 
@@ -432,6 +443,42 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     let mut read_data = vec![0; typ.size()];
                     handle.read(&mut read_data)?;
                     print_read_value(typ, &read_data, subargs.hex);
+                }
+            }
+        }
+        Cmd::Syminfo => {
+            // Connect to the selected target, defaulting to the first PLC instance.
+            let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
+
+            // Query the sizes of symbol and type info.
+            let mut read_data = [0; 64];
+            dev.read_exact(ads::index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
+            let symbol_len = LE::read_u32(&read_data[4..]) as usize;
+            let types_len  = LE::read_u32(&read_data[12..]) as usize;
+
+            // Query the type info.
+            let mut type_data = vec![0; types_len];
+            dev.read_exact(ads::index::SYM_DT_UPLOAD, 0, &mut type_data)?;
+
+            // Query the symbol info.
+            let mut symbol_data = vec![0; symbol_len];
+            dev.read_exact(ads::index::SYM_UPLOAD, 0, &mut symbol_data)?;
+
+            let (symbols, type_map) = decode_symbol_info(symbol_data, type_data);
+
+            for sym in symbols {
+                println!("{:4x}:{:6x} ({:6x}) {:40} {}",
+                         sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
+                let typ = &type_map[&sym.typ];
+                assert_eq!(typ.size, sym.size);
+                for field in &typ.fields {
+                    if let Some(offset) = field.offset {
+                        println!("     {:6x} ({:6x})   .{:37} {}",
+                                 sym.ix_offset + offset, field.size, field.name, field.typ);
+                    }
                 }
             }
         }
@@ -513,7 +560,7 @@ fn printable(ch: &u8) -> char {
 }
 
 /// Print a hexdump of a byte slice in the usual format.
-pub fn hexdump(mut data: &[u8]) {
+fn hexdump(mut data: &[u8]) {
     let mut addr = 0;
     while !data.is_empty() {
         let (line, rest) = data.split_at(data.len().min(16));
@@ -525,4 +572,119 @@ pub fn hexdump(mut data: &[u8]) {
         data = rest;
     }
     println!();
+}
+
+struct Symbol {
+    name:      String,
+    ix_group:  u32,
+    ix_offset: u32,
+    typ:       String,
+    size:      usize,
+}
+
+#[allow(dead_code)]
+struct Field {
+    name:   String,
+    typ:    String,
+    offset: Option<u32>,
+    size:   usize,
+    array:  Vec<(u32, u32)>,
+}
+
+#[allow(dead_code)]
+struct Type {
+    name:   String,
+    size:   usize,
+    array:  Vec<(u32, u32)>,
+    fields: Vec<Field>,
+}
+
+fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> (Vec<Symbol>, HashMap<String, Type>) {
+    // Decode the type info.
+    let mut buf = [0; 1024];
+    let mut data_ptr = type_data.as_slice();
+    let mut type_map = HashMap::new();
+    fn decode_type_info(mut ptr: &[u8], parent: Option<&mut Type>) -> Option<Type> {
+        let mut buf = [0; 1024];
+        let version = ptr.read_u32::<LE>().unwrap();
+        assert_eq!(version, 1);
+        let _hash = ptr.read_u32::<LE>().unwrap();
+        let _hash_base = ptr.read_u32::<LE>().unwrap();
+        let size = ptr.read_u32::<LE>().unwrap() as usize;
+        let offset = ptr.read_u32::<LE>().unwrap();
+        let _type = ptr.read_u32::<LE>().unwrap();
+        let _flags = ptr.read_u32::<LE>().unwrap();
+        let len_name = ptr.read_u16::<LE>().unwrap() as usize;
+        let len_type = ptr.read_u16::<LE>().unwrap() as usize;
+        let len_comment = ptr.read_u16::<LE>().unwrap() as usize;
+        let array_dim = ptr.read_u16::<LE>().unwrap();
+        let sub_items = ptr.read_u16::<LE>().unwrap();
+        ptr.read_exact(&mut buf[..len_name + 1]).unwrap();
+        let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
+        ptr.read_exact(&mut buf[..len_type + 1]).unwrap();
+        let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
+        ptr.read_exact(&mut buf[..len_comment + 1]).unwrap();
+
+        let mut array = vec![];
+        for _ in 0..array_dim {
+            let lower = ptr.read_u32::<LE>().unwrap();
+            let total = ptr.read_u32::<LE>().unwrap();
+            array.push((lower, lower + total - 1));
+        }
+
+        if let Some(parent) = parent {
+            assert_eq!(sub_items, 0);
+            // Offset -1 marks that the field is placed somewhere else in memory
+            // (e.g. AT %Mxx).
+            let offset = if offset == 0xFFFF_FFFF { None } else { Some(offset) };
+            parent.fields.push(Field { name, typ, offset, size, array });
+            None
+        } else {
+            assert_eq!(offset, 0);
+            let mut typinfo = Type { name, size, array, fields: Vec::new() };
+
+            for _ in 0..sub_items {
+                let sub_size = ptr.read_u32::<LE>().unwrap() as usize;
+                let (sub_ptr, rest) = ptr.split_at(sub_size - 4);
+                decode_type_info(sub_ptr, Some(&mut typinfo));
+                ptr = rest;
+            }
+            Some(typinfo)
+        }
+    }
+
+    while !data_ptr.is_empty() {
+        let entry_size = data_ptr.read_u32::<LE>().unwrap() as usize;
+        let (entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
+        let typ = decode_type_info(entry_ptr, None).unwrap();
+        type_map.insert(typ.name.clone(), typ);
+        data_ptr = rest;
+    }
+
+    // Decode the symbol info.
+    let mut symbols = Vec::new();
+    let mut data_ptr = symbol_data.as_slice();
+    while !data_ptr.is_empty() {
+        let entry_size = data_ptr.read_u32::<LE>().unwrap() as usize;
+        let (mut entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
+        let ix_group = entry_ptr.read_u32::<LE>().unwrap();
+        let ix_offset = entry_ptr.read_u32::<LE>().unwrap();
+        let size = entry_ptr.read_u32::<LE>().unwrap() as usize;
+        let _type = entry_ptr.read_u32::<LE>().unwrap();
+        let _flags = entry_ptr.read_u32::<LE>().unwrap();
+        let len_name = entry_ptr.read_u16::<LE>().unwrap() as usize;
+        let len_type = entry_ptr.read_u16::<LE>().unwrap() as usize;
+        let len_comment = entry_ptr.read_u16::<LE>().unwrap() as usize;
+        entry_ptr.read_exact(&mut buf[..len_name + 1]).unwrap();
+        let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
+        entry_ptr.read_exact(&mut buf[..len_type + 1]).unwrap();
+        let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
+        entry_ptr.read_exact(&mut buf[..len_comment + 1]).unwrap();
+
+        symbols.push(Symbol { name, ix_group, ix_offset, typ, size });
+
+        data_ptr = rest;
+    }
+
+    (symbols, type_map)
 }
