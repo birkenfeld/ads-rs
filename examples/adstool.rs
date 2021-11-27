@@ -48,8 +48,7 @@ enum Cmd {
     Info,
     State(StateArgs),
     Raw(RawAction),
-    Var(VarArgs),
-    Syminfo(SyminfoArgs),
+    Var(VarAction),
 }
 
 #[derive(StructOpt, Debug)]
@@ -178,31 +177,40 @@ enum RawAction {
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(group = ArgGroup::with_name("spec").required(true))]
 /// Variable read or write access.
-struct VarArgs {
-    /// the variable name
-    name: String,
-    /// the new value, if given, to write
-    value: Option<String>,
-    /// the variable type
-    #[structopt(long, group = "spec")]
-    r#type: Option<VarType>,
-    /// the length to read, can be 0xABCD
-    #[structopt(long, parse(try_from_str = parse), group = "spec")]
-    length: Option<usize>,
-    /// whether to print integers as hex
-    #[structopt(long)]
-    hex: bool,
+enum VarAction {
+    /// List variables together with their types, sizes and offsets.
+    List {
+        /// a filter for the returned symbol names
+        filter: Option<String>,
+    },
+    /// Read a variable by name.
+    #[structopt(group = ArgGroup::with_name("spec").required(true))]
+    Read {
+        /// the variable name
+        name: String,
+        /// the variable type
+        #[structopt(long, group = "spec")]
+        r#type: Option<VarType>,
+        /// the length to read, can be 0xABCD
+        #[structopt(long, parse(try_from_str = parse), group = "spec")]
+        length: Option<usize>,
+        /// whether to print integers as hex
+        #[structopt(long)]
+        hex: bool,
+    },
+    /// Write a variable by name.
+    Write {
+        /// the variable name
+        name: String,
+        /// the new value, if given, to write
+        #[structopt(requires = "type")]
+        value: Option<String>,
+        /// the variable type
+        #[structopt(long)]
+        r#type: Option<VarType>,
+    }
 }
-
-#[derive(StructOpt, Debug)]
-/// Query info about symbols and their types.
-struct SyminfoArgs {
-    /// a filter for the returned symbols
-    filter: Option<String>,
-}
-
 
 #[derive(Clone, Copy, Debug, EnumString)]
 #[strum(serialize_all = "UPPERCASE")]
@@ -441,72 +449,69 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
             let dev = client.device(amsaddr);
 
-            // Get a handle to the variable.
-            let handle = ads::symbol::Handle::new(dev, &subargs.name)?;
-            let typ = subargs.r#type;
+            match subargs {
+                VarAction::List { filter } => {
+                    // Query the sizes of symbol and type info.
+                    let mut read_data = [0; 64];
+                    dev.read_exact(ads::index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
+                    let symbol_len = LE::read_u32(&read_data[4..]) as usize;
+                    let types_len  = LE::read_u32(&read_data[12..]) as usize;
 
-            // Write or read data?
-            if let Some(value) = subargs.value {
-                // TODO
-                let write_data = get_write_value(typ.unwrap(), value)?;
-                handle.write(&write_data)?;
-            } else {
-                if let Some(length) = subargs.length {
-                    let mut read_data = vec![0; length];
-                    handle.read(&mut read_data)?;
-                    if subargs.hex {
-                        hexdump(&read_data);
+                    // Query the type info.
+                    let mut type_data = vec![0; types_len];
+                    dev.read_exact(ads::index::SYM_DT_UPLOAD, 0, &mut type_data)?;
+
+                    // Query the symbol info.
+                    let mut symbol_data = vec![0; symbol_len];
+                    dev.read_exact(ads::index::SYM_UPLOAD, 0, &mut symbol_data)?;
+
+                    let (symbols, type_map) = decode_symbol_info(symbol_data, type_data);
+
+                    fn print_fields(type_map: &HashMap<String, Type>, base_offset: u32,
+                                    typ: &str, level: usize) {
+                        for field in &type_map[typ].fields {
+                            if let Some(offset) = field.offset {
+                                let indent = (0..2*level).map(|_| ' ').collect::<String>();
+                                println!("     {:6x} ({:6x}) {}.{:5$} {}", base_offset + offset,
+                                         field.size, indent, field.name, field.typ, 39-2*level);
+                                print_fields(type_map, base_offset + offset, &field.typ, level+1);
+                            }
+                        }
+                    }
+
+                    let filter = filter.unwrap_or("".into()).to_lowercase().to_string();
+                    for sym in symbols {
+                        if sym.name.to_lowercase().contains(&filter) {
+                            println!("{:4x}:{:6x} ({:6x}) {:40} {}",
+                                     sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
+                            print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
+                        }
+                    }
+                }
+                VarAction::Read { name, r#type, length, hex } => {
+                    let handle = ads::symbol::Handle::new(dev, &name)?;
+                    if let Some(length) = length {
+                        let mut read_data = vec![0; length];
+                        handle.read(&mut read_data)?;
+                        if hex {
+                            hexdump(&read_data);
+                        } else {
+                            stdout().write_all(&read_data)?;
+                        }
+                    } else if let Some(typ) = r#type {
+                        let mut read_data = vec![0; typ.size()];
+                        handle.read(&mut read_data)?;
+                        print_read_value(typ, &read_data, hex);
+                    }
+                }
+                VarAction::Write { name, value, r#type } => {
+                    let handle = ads::symbol::Handle::new(dev, &name)?;
+                    if let Some(typ) = r#type {
+                        let write_data = get_write_value(typ, value.unwrap())?;
+                        handle.write(&write_data)?;
                     } else {
-                        stdout().write_all(&read_data)?;
+                        // TODO
                     }
-                } else if let Some(typ) = subargs.r#type {
-                    let mut read_data = vec![0; typ.size()];
-                    handle.read(&mut read_data)?;
-                    print_read_value(typ, &read_data, subargs.hex);
-                }
-            }
-        }
-        Cmd::Syminfo(subargs) => {
-            // Connect to the selected target, defaulting to the first PLC instance.
-            let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
-            let dev = client.device(amsaddr);
-
-            // Query the sizes of symbol and type info.
-            let mut read_data = [0; 64];
-            dev.read_exact(ads::index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
-            let symbol_len = LE::read_u32(&read_data[4..]) as usize;
-            let types_len  = LE::read_u32(&read_data[12..]) as usize;
-
-            // Query the type info.
-            let mut type_data = vec![0; types_len];
-            dev.read_exact(ads::index::SYM_DT_UPLOAD, 0, &mut type_data)?;
-
-            // Query the symbol info.
-            let mut symbol_data = vec![0; symbol_len];
-            dev.read_exact(ads::index::SYM_UPLOAD, 0, &mut symbol_data)?;
-
-            let (symbols, type_map) = decode_symbol_info(symbol_data, type_data);
-
-            fn print_fields(type_map: &HashMap<String, Type>, base_off: u32, typ: &str, level: usize) {
-                for field in &type_map[typ].fields {
-                    if let Some(offset) = field.offset {
-                        let indent = (0..2*level).map(|_| ' ').collect::<String>();
-                        println!("     {:6x} ({:6x}) {}.{:5$} {}",
-                                 base_off + offset, field.size, indent, field.name, field.typ, 39-2*level);
-                        print_fields(type_map, base_off + offset, &field.typ, level+1);
-                    }
-                }
-            }
-
-            let filter = subargs.filter.unwrap_or("".into()).to_lowercase().to_string();
-
-            for sym in symbols {
-                if sym.name.to_lowercase().contains(&filter) {
-                    println!("{:4x}:{:6x} ({:6x}) {:40} {}",
-                             sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
-                    print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
                 }
             }
         }
