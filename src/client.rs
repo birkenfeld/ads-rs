@@ -474,7 +474,8 @@ impl<'c> Device<'c> {
         })
     }
 
-    /// Read some data at a given index group/offset.
+    /// Read some data at a given index group/offset.  Returned data can be shorter than
+    /// the buffer, the length is the return value.
     pub fn read(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<usize> {
         let header = IndexLength {
             index_group:  U32::new(index_group),
@@ -489,7 +490,8 @@ impl<'c> Device<'c> {
         Ok(read_len.get() as usize)
     }
 
-    /// Read some data at a given index group/offset.
+    /// Read some data at a given index group/offset, ensuring that the returned data has
+    /// exactly the size of the passed buffer.
     pub fn read_exact(&self, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<()> {
         let len = self.read(index_group, index_offset, data)?;
         if len != data.len() {
@@ -526,6 +528,16 @@ impl<'c> Device<'c> {
                                 &[header.as_bytes(), write_data],
                                 &mut [read_len.as_bytes_mut(), read_data])?;
         Ok(read_len.get() as usize)
+    }
+
+    /// Like `write_read`, but ensure the returned data length matches the output buffer.
+    pub fn write_read_exact(&self, index_group: u32, index_offset: u32, write_data: &[u8],
+                            read_data: &mut [u8]) -> Result<()> {
+        let len = self.write_read(index_group, index_offset, write_data, read_data)?;
+        if len != read_data.len() {
+            return Err(Error::Reply("write/read data", "got less data than expected", len as u32));
+        }
+        Ok(())
     }
 
     /// Return the ADS and device state of the device.

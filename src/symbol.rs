@@ -15,8 +15,8 @@ impl<'c> Handle<'c> {
     /// Create a new handle to a single symbol.
     pub fn new(device: Device<'c>, symbol: &str) -> Result<Self> {
         let mut handle_bytes = [0; 4];
-        device.write_read(index::GET_SYMHANDLE_BYNAME, 0, symbol.as_bytes(),
-                          &mut handle_bytes)?;
+        device.write_read_exact(index::GET_SYMHANDLE_BYNAME, 0, symbol.as_bytes(),
+                                &mut handle_bytes)?;
         Ok(Self { device, handle: u32::from_le_bytes(handle_bytes) })
     }
 

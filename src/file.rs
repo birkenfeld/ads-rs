@@ -19,7 +19,7 @@ impl<'c> File<'c> {
     /// Open a file.  `flags` must be combined from the constants in this module.
     pub fn open(device: Device<'c>, filename: impl AsRef<[u8]>, flags: u32) -> Result<Self> {
         let mut hdl = [0; 4];
-        device.write_read(index::FILE_OPEN, flags, filename.as_ref(), &mut hdl)?;
+        device.write_read_exact(index::FILE_OPEN, flags, filename.as_ref(), &mut hdl)?;
         Ok(File {
             device,
             handle: u32::from_le_bytes(hdl),
@@ -47,8 +47,8 @@ impl<'c> File<'c> {
         argument.extend(b"\\*.*");
 
         loop {
-            match device.write_read(index::FILE_BROWSE, offset, &argument, &mut buf) {
-                Ok(324) => {
+            match device.write_read_exact(index::FILE_BROWSE, offset, &argument, &mut buf) {
+                Ok(_) => {
                     let attrs = LE::read_u32(&buf[4..8]);
                     let sizeh = LE::read_u32(&buf[32..36]);
                     let sizel = LE::read_u32(&buf[36..40]);
@@ -56,7 +56,6 @@ impl<'c> File<'c> {
                     let name = buf[48..].iter().copied().take_while(|&b| b != 0).collect();
                     files.push((name, attrs, size));
                 }
-                Ok(n) => return Err(Error::Reply("list files", "expecting more data", n as u32)),
                 // Error "not found" means the end of the list.
                 Err(Error::Ads(_, _, 0x70c)) => return Ok(files),
                 Err(e) => return Err(e),
