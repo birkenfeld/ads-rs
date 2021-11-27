@@ -199,7 +199,9 @@ enum VarAction {
         #[structopt(long)]
         hex: bool,
     },
-    /// Write a variable by name.
+    /// Write a variable by name.  If --type is given, the new value
+    /// is converted from the command line argument.  If not, the new
+    /// value is read as raw data from stdin.
     Write {
         /// the variable name
         name: String,
@@ -514,7 +516,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         let write_data = get_write_value(typ, value.unwrap())?;
                         handle.write(&write_data)?;
                     } else {
-                        // TODO
+                        let mut write_data = Vec::new();
+                        stdin().read_to_end(&mut write_data)?;
+                        handle.write(&write_data)?;
                     }
                 }
             }
@@ -636,6 +640,7 @@ struct Type {
     fields: Vec<Field>,
 }
 
+// TODO: move this into lib?
 fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> (Vec<Symbol>, HashMap<String, Type>) {
     // Decode the type info.
     let mut buf = [0; 1024];
