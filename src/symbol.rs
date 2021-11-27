@@ -1,5 +1,7 @@
 //! Wrapper for symbol handles.
 
+use std::convert::TryInto;
+
 use crate::index;
 use crate::{Device, Result};
 
@@ -28,6 +30,21 @@ impl<'c> Handle<'c> {
     /// Write data to the variable.
     pub fn write(&self, buf: &[u8]) -> Result<()> {
         self.device.write(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
+    }
+
+    /// Get symbol size by name.
+    pub fn get_size(device: Device<'c>, symbol: &str) -> Result<usize> {
+        let mut buf = [0; 12];
+        device.write_read_exact(index::GET_SYMINFO_BYNAME, 0, symbol.as_bytes(), &mut buf)?;
+        Ok(u32::from_le_bytes(buf[8..].try_into().expect("size")) as usize)
+    }
+
+    /// Get symbol location (index group and index offset) by name.
+    pub fn get_location(device: Device<'c>, symbol: &str) -> Result<(u32, u32)> {
+        let mut buf = [0; 12];
+        device.write_read_exact(index::GET_SYMINFO_BYNAME, 0, symbol.as_bytes(), &mut buf)?;
+        Ok((u32::from_le_bytes(buf[0..4].try_into().expect("size")),
+            u32::from_le_bytes(buf[4..8].try_into().expect("size"))))
     }
 }
 
