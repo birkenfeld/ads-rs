@@ -344,7 +344,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let dev = client.device(amsaddr);
             match subargs {
                 FileAction::List { path } => {
-                    let entries = file::File::listdir(dev, &path)?;
+                    let entries = file::listdir(dev, &path)?;
                     for (name, attr, size) in entries {
                         println!("{} {:8} {}", 
                                  if attr & file::DIRECTORY != 0 { "D" } else { " " },
