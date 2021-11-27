@@ -5,7 +5,7 @@ use std::convert::TryInto;
 use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
-use byteorder::{ByteOrder, LE, ReadBytesExt};
+use byteorder::{ByteOrder, LE, ReadBytesExt, WriteBytesExt};
 use itertools::Itertools;
 use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
@@ -49,6 +49,7 @@ enum Cmd {
     State(StateArgs),
     Raw(RawAction),
     Var(VarAction),
+    Exec(ExecArgs),
 }
 
 #[derive(StructOpt, Debug)]
@@ -212,6 +213,18 @@ enum VarAction {
         #[structopt(long)]
         r#type: Option<VarType>,
     }
+}
+
+#[derive(StructOpt, Debug)]
+/// Execute a system command on the target.
+struct ExecArgs {
+    /// the executable with path
+    program: String,
+    /// the working directory (defaults to the executable's)
+    #[structopt(long)]
+    workingdir: Option<String>,
+    /// arguments for the executable
+    args: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, EnumString)]
@@ -522,6 +535,28 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     }
                 }
             }
+        }
+        Cmd::Exec(subargs) => {
+            let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
+            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
+            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let dev = client.device(amsaddr);
+
+            let workingdir = subargs.workingdir.as_deref().unwrap_or("");
+            let args = subargs.args.into_iter().join(" ").to_string();
+
+            let mut data = Vec::new();
+            data.write_u32::<LE>(subargs.program.len() as u32).unwrap();
+            data.write_u32::<LE>(workingdir.len() as u32).unwrap();
+            data.write_u32::<LE>(args.len() as u32).unwrap();
+            data.write_all(subargs.program.as_bytes()).unwrap();
+            data.write_all(&[0]).unwrap();
+            data.write_all(workingdir.as_bytes()).unwrap();
+            data.write_all(&[0]).unwrap();
+            data.write_all(args.as_bytes()).unwrap();
+            data.write_all(&[0]).unwrap();
+
+            dev.write(ads::index::EXECUTE, 0, &data)?;
         }
     }
     Ok(())
