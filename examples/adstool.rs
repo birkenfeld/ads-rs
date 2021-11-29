@@ -494,7 +494,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     }
 
-                    let filter = filter.unwrap_or("".into()).to_lowercase().to_string();
+                    let filter = filter.unwrap_or_default().to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
                             println!("{:4x}:{:6x} ({:6x}) {:40} {}",
@@ -543,7 +543,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let dev = client.device(amsaddr);
 
             let workingdir = subargs.workingdir.as_deref().unwrap_or("");
-            let args = subargs.args.into_iter().join(" ").to_string();
+            let args = subargs.args.into_iter().join(" ");
 
             let mut data = Vec::new();
             data.write_u32::<LE>(subargs.program.len() as u32).unwrap();
