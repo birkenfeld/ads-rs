@@ -1,11 +1,10 @@
 //! Reproduces the functionality of "adstool" from the Beckhoff ADS C++ library.
 
-use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
-use byteorder::{ByteOrder, LE, ReadBytesExt, WriteBytesExt};
+use byteorder::{LE, WriteBytesExt};
 use itertools::Itertools;
 use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
@@ -477,23 +476,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
             match subargs {
                 VarAction::List { filter } => {
-                    // Query the sizes of symbol and type info.
-                    let mut read_data = [0; 64];
-                    dev.read_exact(ads::index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
-                    let symbol_len = LE::read_u32(&read_data[4..]) as usize;
-                    let types_len  = LE::read_u32(&read_data[12..]) as usize;
+                    let (symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
 
-                    // Query the type info.
-                    let mut type_data = vec![0; types_len];
-                    dev.read_exact(ads::index::SYM_DT_UPLOAD, 0, &mut type_data)?;
-
-                    // Query the symbol info.
-                    let mut symbol_data = vec![0; symbol_len];
-                    dev.read_exact(ads::index::SYM_UPLOAD, 0, &mut symbol_data)?;
-
-                    let (symbols, type_map) = decode_symbol_info(symbol_data, type_data);
-
-                    fn print_fields(type_map: &HashMap<String, Type>, base_offset: u32,
+                    fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32,
                                     typ: &str, level: usize) {
                         for field in &type_map[typ].fields {
                             if let Some(offset) = field.offset {
@@ -657,120 +642,4 @@ fn hexdump(mut data: &[u8]) {
         data = rest;
     }
     println!();
-}
-
-struct Symbol {
-    name:      String,
-    ix_group:  u32,
-    ix_offset: u32,
-    typ:       String,
-    size:      usize,
-}
-
-#[allow(dead_code)]
-struct Field {
-    name:   String,
-    typ:    String,
-    offset: Option<u32>,
-    size:   usize,
-    array:  Vec<(u32, u32)>,
-}
-
-#[allow(dead_code)]
-struct Type {
-    name:   String,
-    size:   usize,
-    array:  Vec<(u32, u32)>,
-    fields: Vec<Field>,
-}
-
-// TODO: move this into lib?
-fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> (Vec<Symbol>, HashMap<String, Type>) {
-    // Decode the type info.
-    let mut buf = [0; 1024];
-    let mut data_ptr = type_data.as_slice();
-    let mut type_map = HashMap::new();
-    fn decode_type_info(mut ptr: &[u8], parent: Option<&mut Type>) -> Option<Type> {
-        let mut buf = [0; 1024];
-        let version = ptr.read_u32::<LE>().unwrap();
-        assert_eq!(version, 1);
-        let _hash = ptr.read_u32::<LE>().unwrap();
-        let _hash_base = ptr.read_u32::<LE>().unwrap();
-        let size = ptr.read_u32::<LE>().unwrap() as usize;
-        let offset = ptr.read_u32::<LE>().unwrap();
-        let _type = ptr.read_u32::<LE>().unwrap();
-        let _flags = ptr.read_u32::<LE>().unwrap();
-        let len_name = ptr.read_u16::<LE>().unwrap() as usize;
-        let len_type = ptr.read_u16::<LE>().unwrap() as usize;
-        let len_comment = ptr.read_u16::<LE>().unwrap() as usize;
-        let array_dim = ptr.read_u16::<LE>().unwrap();
-        let sub_items = ptr.read_u16::<LE>().unwrap();
-        ptr.read_exact(&mut buf[..len_name + 1]).unwrap();
-        let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
-        ptr.read_exact(&mut buf[..len_type + 1]).unwrap();
-        let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        ptr.read_exact(&mut buf[..len_comment + 1]).unwrap();
-
-        let mut array = vec![];
-        for _ in 0..array_dim {
-            let lower = ptr.read_u32::<LE>().unwrap();
-            let total = ptr.read_u32::<LE>().unwrap();
-            array.push((lower, lower + total - 1));
-        }
-
-        if let Some(parent) = parent {
-            assert_eq!(sub_items, 0);
-            // Offset -1 marks that the field is placed somewhere else in memory
-            // (e.g. AT %Mxx).
-            let offset = if offset == 0xFFFF_FFFF { None } else { Some(offset) };
-            parent.fields.push(Field { name, typ, offset, size, array });
-            None
-        } else {
-            assert_eq!(offset, 0);
-            let mut typinfo = Type { name, size, array, fields: Vec::new() };
-
-            for _ in 0..sub_items {
-                let sub_size = ptr.read_u32::<LE>().unwrap() as usize;
-                let (sub_ptr, rest) = ptr.split_at(sub_size - 4);
-                decode_type_info(sub_ptr, Some(&mut typinfo));
-                ptr = rest;
-            }
-            Some(typinfo)
-        }
-    }
-
-    while !data_ptr.is_empty() {
-        let entry_size = data_ptr.read_u32::<LE>().unwrap() as usize;
-        let (entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
-        let typ = decode_type_info(entry_ptr, None).unwrap();
-        type_map.insert(typ.name.clone(), typ);
-        data_ptr = rest;
-    }
-
-    // Decode the symbol info.
-    let mut symbols = Vec::new();
-    let mut data_ptr = symbol_data.as_slice();
-    while !data_ptr.is_empty() {
-        let entry_size = data_ptr.read_u32::<LE>().unwrap() as usize;
-        let (mut entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
-        let ix_group = entry_ptr.read_u32::<LE>().unwrap();
-        let ix_offset = entry_ptr.read_u32::<LE>().unwrap();
-        let size = entry_ptr.read_u32::<LE>().unwrap() as usize;
-        let _type = entry_ptr.read_u32::<LE>().unwrap();
-        let _flags = entry_ptr.read_u32::<LE>().unwrap();
-        let len_name = entry_ptr.read_u16::<LE>().unwrap() as usize;
-        let len_type = entry_ptr.read_u16::<LE>().unwrap() as usize;
-        let len_comment = entry_ptr.read_u16::<LE>().unwrap() as usize;
-        entry_ptr.read_exact(&mut buf[..len_name + 1]).unwrap();
-        let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
-        entry_ptr.read_exact(&mut buf[..len_type + 1]).unwrap();
-        let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        entry_ptr.read_exact(&mut buf[..len_comment + 1]).unwrap();
-
-        symbols.push(Symbol { name, ix_group, ix_offset, typ, size });
-
-        data_ptr = rest;
-    }
-
-    (symbols, type_map)
 }
