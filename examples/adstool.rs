@@ -19,6 +19,10 @@ use strum::EnumString;
 struct Args {
     #[structopt(subcommand)]
     cmd: Cmd,
+    /// If true, automatically try to set a route with the default password
+    /// before connecting.
+    #[structopt(short, long)]
+    autoroute: bool,
     /// Target for the command.
     ///
     /// This can be `hostname[:port]` or include an AMS address using
@@ -307,14 +311,31 @@ enum Error {
     Str(String),
 }
 
-fn main_inner(args: Args) -> Result<(), Error> {
-    let target = args.target;
-    let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::PORT));
-    let udp_addr = (target.host.as_str(), target.port.unwrap_or(ads::UDP_PORT));
-    let get_netid = || match target.netid {
-        Some(netid) => Ok(netid),
-        None => ads::udp::get_netid((target.host.as_str(), ads::UDP_PORT)),
+fn connect(target: Target, autoroute: bool, defport: ads::AmsPort) -> ads::Result<(ads::Client, ads::AmsAddr)> {
+    let target_netid = match target.netid {
+        Some(netid) => netid,
+        None => ads::udp::get_netid((target.host.as_str(), ads::UDP_PORT))?,
     };
+    let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::PORT));
+    let amsport = target.amsport.unwrap_or(defport);
+    let amsaddr = ads::AmsAddr::new(target_netid, amsport);
+    let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+    if autoroute {
+        if let Err(ads::Error::Io(..)) = client.device(amsaddr).get_info() {
+            println!("Device info failed, trying to set a route...");
+            let ip = client.source().netid().0;
+            let ip = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+            ads::udp::add_route((target.host.as_str(), ads::UDP_PORT),
+                                client.source().netid(), &ip, None,
+                                None, None, true)?;
+            return connect(target, false, defport);
+        }
+    }
+    Ok((client, amsaddr))
+}
+
+fn main_inner(args: Args) -> Result<(), Error> {
+    let udp_addr = (args.target.host.as_str(), args.target.port.unwrap_or(ads::UDP_PORT));
     match args.cmd {
         Cmd::Addroute(subargs) => {
             ads::udp::add_route(udp_addr, subargs.netid, &subargs.addr,
@@ -338,9 +359,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
         }
         Cmd::File(subargs) => {
             use ads::file;
-            let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
             let dev = client.device(amsaddr);
             match subargs {
                 FileAction::List { path } => {
@@ -368,9 +387,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
         }
         Cmd::State(subargs) => {
-            let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
             let dev = client.device(amsaddr);
             let info = dev.get_info()?;
             println!("Device: {} {}.{}.{}", info.name, info.major, info.minor, info.version);
@@ -383,9 +400,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
         }
         Cmd::License(object) => {
             // Connect to the selected target, defaulting to the license server.
-            let amsport = target.amsport.unwrap_or(ads::ports::LICENSE_SERVER);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::LICENSE_SERVER)?;
             let dev = client.device(amsaddr);
             match object {
                 LicenseAction::Platformid => {
@@ -410,9 +425,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
         }
         Cmd::Raw(subargs) => {
             // Connect to the selected target, defaulting to the first PLC instance.
-            let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
             let dev = client.device(amsaddr);
 
             match subargs {
@@ -459,9 +472,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
         }
         Cmd::Var(subargs) => {
             // Connect to the selected target, defaulting to the first PLC instance.
-            let amsport = target.amsport.unwrap_or(ads::ports::TC3_PLC_SYSTEM1);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
             let dev = client.device(amsaddr);
 
             match subargs {
@@ -537,9 +548,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
         }
         Cmd::Exec(subargs) => {
-            let amsport = target.amsport.unwrap_or(ads::ports::SYSTEM_SERVICE);
-            let amsaddr = ads::AmsAddr::new(get_netid()?, amsport);
-            let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
             let dev = client.device(amsaddr);
 
             let workingdir = subargs.workingdir.as_deref().unwrap_or("");
