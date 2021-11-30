@@ -6,6 +6,7 @@ use std::io::Read;
 
 use byteorder::{ByteOrder, LE, ReadBytesExt};
 
+use crate::errors::{Error, ErrContext};
 use crate::index;
 use crate::{Device, Result};
 
@@ -132,7 +133,7 @@ pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
     let mut symbol_data = vec![0; symbol_len];
     device.read_exact(index::SYM_UPLOAD, 0, &mut symbol_data)?;
 
-    Ok(decode_symbol_info(symbol_data, type_data))
+    decode_symbol_info(symbol_data, type_data)
 }
 
 /// Decode symbol and type information from the PLC.
@@ -141,37 +142,41 @@ pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
 /// respectively.
 ///
 /// Returns a list of symbols, and a map of type names to types.
-pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> (Vec<Symbol>, TypeMap) {
+pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(Vec<Symbol>, TypeMap)> {
     // Decode the type info.
     let mut buf = [0; 1024];
     let mut data_ptr = type_data.as_slice();
     let mut type_map = HashMap::new();
 
-    fn decode_type_info(mut ptr: &[u8], parent: Option<&mut Type>) -> Option<Type> {
+    fn decode_type_info(mut ptr: &[u8], parent: Option<&mut Type>) -> Result<Option<Type>> {
+        let ctx = "decoding type info";
+
         let mut buf = [0; 1024];
-        let version = ptr.read_u32::<LE>().unwrap();
-        assert_eq!(version, 1);
-        let _hash = ptr.read_u32::<LE>().unwrap();
-        let _hash_base = ptr.read_u32::<LE>().unwrap();
-        let size = ptr.read_u32::<LE>().unwrap() as usize;
-        let offset = ptr.read_u32::<LE>().unwrap();
-        let base_type = ptr.read_u32::<LE>().unwrap();
-        let flags = ptr.read_u32::<LE>().unwrap();
-        let len_name = ptr.read_u16::<LE>().unwrap() as usize;
-        let len_type = ptr.read_u16::<LE>().unwrap() as usize;
-        let len_comment = ptr.read_u16::<LE>().unwrap() as usize;
-        let array_dim = ptr.read_u16::<LE>().unwrap();
-        let sub_items = ptr.read_u16::<LE>().unwrap();
-        ptr.read_exact(&mut buf[..len_name + 1]).unwrap();
+        let version = ptr.read_u32::<LE>().ctx(ctx)?;
+        if version != 1 {
+            return Err(Error::Reply(ctx, "unknown type info version", version));
+        }
+        let _hash = ptr.read_u32::<LE>().ctx(ctx)?;
+        let _hash_base = ptr.read_u32::<LE>().ctx(ctx)?;
+        let size = ptr.read_u32::<LE>().ctx(ctx)? as usize;
+        let offset = ptr.read_u32::<LE>().ctx(ctx)?;
+        let base_type = ptr.read_u32::<LE>().ctx(ctx)?;
+        let flags = ptr.read_u32::<LE>().ctx(ctx)?;
+        let len_name = ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let len_type = ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let len_comment = ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let array_dim = ptr.read_u16::<LE>().ctx(ctx)?;
+        let sub_items = ptr.read_u16::<LE>().ctx(ctx)?;
+        ptr.read_exact(&mut buf[..len_name + 1]).ctx(ctx)?;
         let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
-        ptr.read_exact(&mut buf[..len_type + 1]).unwrap();
+        ptr.read_exact(&mut buf[..len_type + 1]).ctx(ctx)?;
         let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        ptr.read_exact(&mut buf[..len_comment + 1]).unwrap();
+        ptr.read_exact(&mut buf[..len_comment + 1]).ctx(ctx)?;
 
         let mut array = vec![];
         for _ in 0..array_dim {
-            let lower = ptr.read_u32::<LE>().unwrap();
-            let total = ptr.read_u32::<LE>().unwrap();
+            let lower = ptr.read_u32::<LE>().ctx(ctx)?;
+            let total = ptr.read_u32::<LE>().ctx(ctx)?;
             array.push((lower, lower + total - 1));
         }
 
@@ -181,25 +186,26 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> (Vec<Symb
             // (e.g. AT %Mxx).
             let offset = if offset == 0xFFFF_FFFF { None } else { Some(offset) };
             parent.fields.push(Field { name, typ, offset, size, array, base_type, flags });
-            None
+            Ok(None)
         } else {
             assert_eq!(offset, 0);
             let mut typinfo = Type { name, size, array, base_type, flags, fields: Vec::new() };
 
             for _ in 0..sub_items {
-                let sub_size = ptr.read_u32::<LE>().unwrap() as usize;
+                let sub_size = ptr.read_u32::<LE>().ctx(ctx)? as usize;
                 let (sub_ptr, rest) = ptr.split_at(sub_size - 4);
-                decode_type_info(sub_ptr, Some(&mut typinfo));
+                decode_type_info(sub_ptr, Some(&mut typinfo))?;
                 ptr = rest;
             }
-            Some(typinfo)
+            Ok(Some(typinfo))
         }
     }
 
     while !data_ptr.is_empty() {
-        let entry_size = data_ptr.read_u32::<LE>().unwrap() as usize;
+        let entry_size = data_ptr.read_u32::<LE>()
+            .ctx("decoding type info")? as usize;
         let (entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
-        let typ = decode_type_info(entry_ptr, None).unwrap();
+        let typ = decode_type_info(entry_ptr, None)?.expect("base type");
         type_map.insert(typ.name.clone(), typ);
         data_ptr = rest;
     }
@@ -207,27 +213,28 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> (Vec<Symb
     // Decode the symbol info.
     let mut symbols = Vec::new();
     let mut data_ptr = symbol_data.as_slice();
+    let ctx = "decoding symbol info";
     while !data_ptr.is_empty() {
-        let entry_size = data_ptr.read_u32::<LE>().unwrap() as usize;
+        let entry_size = data_ptr.read_u32::<LE>().ctx(ctx)? as usize;
         let (mut entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
-        let ix_group = entry_ptr.read_u32::<LE>().unwrap();
-        let ix_offset = entry_ptr.read_u32::<LE>().unwrap();
-        let size = entry_ptr.read_u32::<LE>().unwrap() as usize;
-        let base_type = entry_ptr.read_u32::<LE>().unwrap();
-        let flags = entry_ptr.read_u32::<LE>().unwrap();
-        let len_name = entry_ptr.read_u16::<LE>().unwrap() as usize;
-        let len_type = entry_ptr.read_u16::<LE>().unwrap() as usize;
-        let len_comment = entry_ptr.read_u16::<LE>().unwrap() as usize;
-        entry_ptr.read_exact(&mut buf[..len_name + 1]).unwrap();
+        let ix_group = entry_ptr.read_u32::<LE>().ctx(ctx)?;
+        let ix_offset = entry_ptr.read_u32::<LE>().ctx(ctx)?;
+        let size = entry_ptr.read_u32::<LE>().ctx(ctx)? as usize;
+        let base_type = entry_ptr.read_u32::<LE>().ctx(ctx)?;
+        let flags = entry_ptr.read_u32::<LE>().ctx(ctx)?;
+        let len_name = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let len_type = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let len_comment = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        entry_ptr.read_exact(&mut buf[..len_name + 1]).ctx(ctx)?;
         let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
-        entry_ptr.read_exact(&mut buf[..len_type + 1]).unwrap();
+        entry_ptr.read_exact(&mut buf[..len_type + 1]).ctx(ctx)?;
         let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        entry_ptr.read_exact(&mut buf[..len_comment + 1]).unwrap();
+        entry_ptr.read_exact(&mut buf[..len_comment + 1]).ctx(ctx)?;
 
         symbols.push(Symbol { name, ix_group, ix_offset, typ, size, base_type, flags });
 
         data_ptr = rest;
     }
 
-    (symbols, type_map)
+    Ok((symbols, type_map))
 }
