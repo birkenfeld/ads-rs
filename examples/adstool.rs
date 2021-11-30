@@ -4,11 +4,12 @@ use std::convert::TryInto;
 use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
-use byteorder::{LE, WriteBytesExt};
+use byteorder::{ByteOrder, BE, LE, WriteBytesExt};
 use itertools::Itertools;
 use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
 use strum::EnumString;
+use time::OffsetDateTime;
 
 #[derive(StructOpt, Debug)]
 #[structopt(global_setting = AppSettings::UnifiedHelpMessage)]
@@ -118,6 +119,8 @@ enum LicenseAction {
     Systemid,
     /// Get the volume number
     Volumeno,
+    /// Get the individual module license GUIDs and their activation status
+    Modules,
 }
 
 #[derive(StructOpt, Debug)]
@@ -364,7 +367,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 FileAction::List { path } => {
                     let entries = file::listdir(dev, &path)?;
                     for (name, attr, size) in entries {
-                        println!("{} {:8} {}", 
+                        println!("{} {:8} {}",
                                  if attr & file::DIRECTORY != 0 { "D" } else { " " },
                                  size, String::from_utf8_lossy(&name));
                     }
@@ -410,15 +413,39 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 LicenseAction::Systemid => {
                     let mut id = [0; 16];
                     dev.read_exact(ads::index::LICENSE, 1, &mut id)?;
-                    println!("{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-\
-                              {:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-                             id[3], id[2], id[1], id[0], id[5], id[4], id[7], id[6], id[8], id[9],
-                             id[10], id[11], id[12], id[13], id[14], id[15]);
+                    println!("{}", format_guid(&id));
                 }
                 LicenseAction::Volumeno => {
                     let mut no = [0; 4];
                     dev.read_exact(ads::index::LICENSE, 5, &mut no)?;
                     println!("{}", u32::from_le_bytes(no));
+                }
+                LicenseAction::Modules => {
+                    // Read the number of modules.
+                    let mut count = [0; 4];
+                    dev.read_exact(ads::index::LICENSE_MODULES, 0, &mut count)?;
+                    let nmodules = u32::from_le_bytes(count) as usize;
+
+                    // Read the data (0x30 bytes per module).
+                    let mut data = vec![0; 0x30 * nmodules];
+                    dev.read_exact(ads::index::LICENSE_MODULES, 0, &mut data)?;
+
+                    // Print the data.
+                    for i in 0..nmodules {
+                        let guid = &data[0x30*i..][..0x10];
+                        let expires = LE::read_i64(&data[0x30*i + 0x10..]);
+                        let exp_time = convert_filetime(expires);
+                        let inst_total = LE::read_u32(&data[0x30*i + 0x18..]);
+                        let inst_used  = LE::read_u32(&data[0x30*i + 0x1c..]);
+
+                        println!("ID: {}", format_guid(guid));
+                        if let Some(exp) = exp_time {
+                            println!("    Expires: {}", exp);
+                        }
+                        if inst_total != 0 {
+                            println!("    Instances used: {}/{}", inst_used, inst_total);
+                        }
+                    }
                 }
             }
         }
@@ -642,4 +669,24 @@ fn hexdump(mut data: &[u8]) {
         data = rest;
     }
     println!();
+}
+
+/// Difference between FILETIME and Unix offsets.
+const EPOCH_OFFSET: i64 = 11644473600;
+
+/// Convert Windows FILETIME to DateTime
+fn convert_filetime(ft: i64) -> Option<OffsetDateTime> {
+    if ft == 0 { return None; }
+    let unix_ts = ft / 10_000_000 - EPOCH_OFFSET;
+    OffsetDateTime::from_unix_timestamp(unix_ts).ok()
+}
+
+/// Format a GUID.
+fn format_guid(guid: &[u8]) -> String {
+    format!("{:08X}-{:04X}-{:04X}-{:04X}-{:012X}",
+            LE::read_u32(&guid),
+            LE::read_u16(&guid[4..]),
+            LE::read_u16(&guid[6..]),
+            BE::read_u16(&guid[8..]),
+            BE::read_u48(&guid[10..]))
 }
