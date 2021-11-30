@@ -21,4 +21,5 @@ parse_int = "0.6.0"
 regex = "1.5.4"
 structopt = "0.3.25"
 strum = { version = "0.23", features = ["derive"] }
-time = { version = "0.3.5", features = ["formatting"] }
+# Version pinned for 1.48 compatibility
+time = { version = "=0.3.2", features = ["formatting"] }
