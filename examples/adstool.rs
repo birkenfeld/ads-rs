@@ -46,10 +46,12 @@ struct Args {
 #[derive(StructOpt, Debug)]
 enum Cmd {
     Addroute(AddRouteArgs),
+    /// Query basic information about the system over UDP.
+    Info,
+    /// Query extended information about the system over ADS.
+    TargetDesc,
     File(FileAction),
     License(LicenseAction),
-    /// Query information about the system over UDP.
-    Info,
     State(StateArgs),
     Raw(RawAction),
     Var(VarAction),
@@ -357,6 +359,24 @@ fn main_inner(args: Args) -> Result<(), Error> {
                      info.os_version.3, info.os_version.4);
             if !info.fingerprint.is_empty() {
                 println!("Fingerprint: {}", info.fingerprint);
+            }
+        }
+        Cmd::TargetDesc => {
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let dev = client.device(amsaddr);
+            let mut xml = [0; 2048];
+            dev.read(ads::index::TARGET_DESC, 1, &mut xml)?;
+            let tree = match elementtree::Element::from_reader(&xml[..]) {
+                Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),
+                Ok(tree) => tree
+            };
+            for child in tree.children() {
+                if !child.text().is_empty() {
+                    println!("{}: {}", child.tag(), child.text());
+                }
+                for sub in child.children() {
+                    println!("{}.{}: {}", child.tag(), sub.tag(), sub.text());
+                }
             }
         }
         Cmd::File(subargs) => {

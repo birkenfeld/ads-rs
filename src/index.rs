@@ -100,6 +100,9 @@ pub const FILE_DELETE: u32 = 131;
 /// File service: browse files.
 pub const FILE_BROWSE: u32 = 133;
 
+/// Index group for target desc query.
+pub const TARGET_DESC: u32 = 0x2bc;
+
 /// Index group for license queries.
 pub const LICENSE: u32 = 0x0101_0004;
 pub const LICENSE_MODULES: u32 = 0x0101_0006;
