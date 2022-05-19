@@ -9,6 +9,7 @@ use itertools::Itertools;
 use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
 use strum::EnumString;
+use quick_xml::events::Event;
 use time::OffsetDateTime;
 
 #[derive(StructOpt, Debug)]
@@ -366,16 +367,22 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let dev = client.device(amsaddr);
             let mut xml = [0; 2048];
             dev.read(ads::index::TARGET_DESC, 1, &mut xml)?;
-            let tree = match elementtree::Element::from_reader(&xml[..]) {
-                Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),
-                Ok(tree) => tree
-            };
-            for child in tree.children() {
-                if !child.text().is_empty() {
-                    println!("{}: {}", child.tag(), child.text());
-                }
-                for sub in child.children() {
-                    println!("{}.{}: {}", child.tag(), sub.tag(), sub.text());
+            let mut rdr = quick_xml::Reader::from_reader(&xml[..]);
+            rdr.trim_text(true);
+            let mut buf = Vec::new();
+            let mut stack = Vec::new();
+            loop {
+                match rdr.read_event(&mut buf) {
+                    Ok(Event::Start(el)) => if el.name() != b"TcTargetDesc" {
+                        stack.push(String::from_utf8_lossy(el.name()).to_string());
+                    }
+                    Ok(Event::End(_)) => { let _ = stack.pop(); }
+                    Ok(Event::Text(t)) => if !stack.is_empty() {
+                        println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(t.escaped()));
+                    }
+                    Ok(Event::Eof) => break,
+                    Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),
+                    _ => ()
                 }
             }
         }
