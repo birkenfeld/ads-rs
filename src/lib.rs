@@ -25,7 +25,7 @@
 //! assert!(device.get_state()?.0 == ads::AdsState::Run);
 //!
 //! // Request a handle to a named symbol in the PLC instance.
-//! let handle = Handle::new(device, "MY_SYMBOL")?;
+//! let handle = ads::Handle::new(device, "MY_SYMBOL")?;
 //! // Read data in form of an u32 from the handle.
 //! let mut data = [0; 4];
 //! handle.read(&mut data)?;
