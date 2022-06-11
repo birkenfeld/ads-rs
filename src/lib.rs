@@ -47,7 +47,7 @@ pub mod symbol;
 #[cfg(test)]
 mod test;
 
-pub use client::{AdsState, Client, Device, Timeouts};
+pub use client::{AdsState, Client, Device, Source, Timeouts};
 pub use errors::{Error, Result};
 pub use file::File;
 pub use netid::{AmsAddr, AmsNetId, AmsPort};

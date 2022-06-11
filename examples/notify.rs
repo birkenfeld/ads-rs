@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use ads::notif::{Attributes, TransmissionMode};
-use ads::{Client, Timeouts};
+use ads::{Client, Source, Timeouts};
 
 fn main() {
-    let client = Client::new(("localhost", ads::PORT), Timeouts::none(), None).unwrap();
+    let client = Client::new(("localhost", ads::PORT), Timeouts::none(), Source::Auto).unwrap();
     let recv_notify = client.get_notification_channel();
     std::thread::spawn(move || {
         for msg in recv_notify.iter() {

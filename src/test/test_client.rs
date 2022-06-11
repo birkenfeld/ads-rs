@@ -4,7 +4,7 @@ use std::io::{self, Read, Write};
 use std::time::Duration;
 
 use crate::test::{config_test_server, ServerOpts};
-use crate::{AmsAddr, AmsNetId, Client, Device, Error, Timeouts};
+use crate::{AmsAddr, AmsNetId, Client, Device, Error, Source, Timeouts};
 
 fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
     let timeouts = if let Some(tmo) = opts.timeout {
@@ -13,7 +13,7 @@ fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
         Timeouts::none()
     };
     let port = config_test_server(opts);
-    let client = Client::new(("127.0.0.1", port), timeouts, None).unwrap();
+    let client = Client::new(("127.0.0.1", port), timeouts, Source::Auto).unwrap();
     f(client.device(AmsAddr::new(AmsNetId::new(1, 2, 3, 4, 5, 6), 851)));
 }
 
@@ -21,7 +21,7 @@ fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
 fn test_garbage_packet() {
     run_test(ServerOpts { garbage_header: true, .. Default::default() }, |device| {
         let err = device.get_info().unwrap_err();
-        assert!(matches!(err, Error::Reply(_, "inconsistent packet", _)));
+        assert!(matches!(err, Error::Reply(_, "invalid packet or unknown AMS command", _)));
     })
 }
 

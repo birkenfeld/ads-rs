@@ -119,7 +119,7 @@ impl Server {
 
             let mut reply_header = AdsHeader::default();
             if opts.garbage_header {
-                reply_header.padding = 234;
+                reply_header.ams_cmd = 234;
             }
             reply_header.length.set(32 + reply_data.len() as u32);
             reply_header.dest_netid = header.src_netid;

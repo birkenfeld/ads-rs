@@ -326,7 +326,7 @@ fn connect(target: Target, autoroute: bool, defport: ads::AmsPort) -> ads::Resul
     let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::PORT));
     let amsport = target.amsport.unwrap_or(defport);
     let amsaddr = ads::AmsAddr::new(target_netid, amsport);
-    let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), None)?;
+    let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), ads::Source::Auto)?;
     if autoroute {
         if let Err(ads::Error::Io(..)) = client.device(amsaddr).get_info() {
             println!("Device info failed, trying to set a route...");

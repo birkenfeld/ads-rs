@@ -63,8 +63,8 @@ impl Command {
 
 /// Size of the AMS/TCP + ADS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
-const HEADER_SIZE: usize = 38;
-const AMS_HEADER_SIZE: usize = HEADER_SIZE - 6; // without leading nulls and length
+const AMS_HEADER_SIZE: usize = 6;
+const ADS_HEADER_SIZE: usize = 38;  // including AMS header
 const DEFAULT_BUFFER_SIZE: usize = 100;
 
 /// Holds the different timeouts that will be used by the Client.
@@ -91,6 +91,18 @@ impl Timeouts {
     }
 }
 
+/// Specifies the source AMS address to use.
+#[derive(Clone, Copy, Debug)]
+pub enum Source {
+    /// Auto-generate a source address from the local address and a random port.
+    Auto,
+    /// Use a specified source address.
+    Addr(AmsAddr),
+    /// Request to open a port in the connected router and get the address from
+    /// it.  This is necessary when connecting to a local PLC on `127.0.0.1`.
+    Request,
+}
+
 /// Represents a connection to a ADS server.
 ///
 /// The Client's communication methods use `&self`, so that it can be freely
@@ -114,6 +126,8 @@ pub struct Client {
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
     notif_handles: RefCell<BTreeSet<(AmsAddr, notif::Handle)>>,
+    /// If we opened our local port with the router
+    source_port_opened: bool,
 }
 
 impl Drop for Client {
@@ -122,6 +136,13 @@ impl Drop for Client {
         let handles = std::mem::take(&mut *self.notif_handles.borrow_mut());
         for (addr, handle) in handles {
             let _ = self.device(addr).delete_notification(handle);
+        }
+
+        // Remove our port from the router, if necessary.
+        if self.source_port_opened {
+            let mut close_port_msg = [1, 0, 2, 0, 0, 0, 0, 0];
+            LE::write_u16(&mut close_port_msg[6..], self.source.port());
+            let _ = self.socket.write_all(&close_port_msg);
         }
 
         // Need to shutdown the connection since the socket is duplicated in the
@@ -141,24 +162,28 @@ impl Client {
     /// message.
     ///
     /// `source` is the AMS address to to use as the source; the NetID needs to
-    /// match the route entry in the server.  If None, the NetID is constructed
-    /// from the local IP address with .1.1 appended; if there is no IPv4
-    /// address, `127.0.0.1.1.1` is used.
+    /// match the route entry in the server.  If `Source::Auto`, the NetID is
+    /// constructed from the local IP address with .1.1 appended; if there is no
+    /// IPv4 address, `127.0.0.1.1.1` is used.
     ///
     /// The AMS port of `source` is not important, as long as it is not a
     /// well-known service port; an ephemeral port number > 49152 is
-    /// recommended.  If None, the port is set to 58913.
+    /// recommended.  If Auto, the port is set to 58913.
+    ///
+    /// If you are connecting to the local PLC, you need to set `source` to
+    /// `Source::Request`.  This will ask the local AMS router for a new
+    /// port and use it as the source port.
     ///
     /// Since all communications is supposed to be handled by an ADS router,
     /// only one TCP/ADS connection can exist between two hosts. Non-TwinCAT
     /// clients should make sure to replicate this behavior, as opening a second
     /// connection will close the first.
-    pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Option<AmsAddr>) -> Result<Self> {
+    pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Source) -> Result<Self> {
         // Connect, taking the timeout into account.  Unfortunately
         // connect_timeout wants a single SocketAddr.
         let addr = addr.to_socket_addrs().ctx("converting address to SocketAddr")?
                                          .next().expect("at least one SocketAddr");
-        let socket = if let Some(timeout) = timeouts.connect {
+        let mut socket = if let Some(timeout) = timeouts.connect {
             TcpStream::connect_timeout(&addr, timeout).ctx("connecting TCP socket with timeout")?
         } else {
             TcpStream::connect(&addr).ctx("connecting TCP socket")?
@@ -172,9 +197,14 @@ impl Client {
         // Determine our source AMS address.  If it's not specified, try to use
         // the socket's local IPv4 address, if it's IPv6 (not sure if Beckhoff
         // devices support that) use `127.0.0.1` as the last resort.
+        //
+        // If source is Request, send an AMS port open message to the connected
+        // router to get our source address.  This is required when connecting
+        // via localhost, apparently.
+        let mut source_port_opened = false;
         let source = match source {
-            Some(id) => id,
-            None => {
+            Source::Addr(id) => id,
+            Source::Auto => {
                 let my_addr = socket.local_addr().ctx("getting local socket address")?.ip();
                 if let IpAddr::V4(ip) = my_addr {
                     let [a, b, c, d] = ip.octets();
@@ -183,6 +213,18 @@ impl Client {
                 } else {
                     AmsAddr::new(AmsNetId::new(127, 0, 0, 1, 1, 1), 58913)
                 }
+            }
+            Source::Request => {
+                let request_port_msg = [0, 16, 2, 0, 0, 0, 0, 0];
+                let mut reply = [0; 14];
+                socket.write_all(&request_port_msg).ctx("requesting port from router")?;
+                socket.read_exact(&mut reply).ctx("requesting port from router")?;
+                if &reply[..6] != &[0, 16, 8, 0, 0, 0] {
+                    return Err(Error::Reply("requesting port", "unexpected reply header", 0));
+                }
+                source_port_opened = true;
+                AmsAddr::new(AmsNetId::from_slice(&reply[6..12]).expect("size"),
+                             LE::read_u16(&reply[12..14]))
             }
         };
 
@@ -214,6 +256,7 @@ impl Client {
             invoke_id: Cell::new(0),
             read_timeout: timeouts.read,
             notif_handles: RefCell::default(),
+            source_port_opened,
         })
     }
 
@@ -252,9 +295,10 @@ impl Client {
         let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
 
         // Create outgoing header.
+        let ads_data_len = ADS_HEADER_SIZE - AMS_HEADER_SIZE + data_in_len;
         let header = AdsHeader {
             ams_cmd:     0,  // send command
-            length:      U32::new((AMS_HEADER_SIZE + data_in_len).try_into()?),
+            length:      U32::new(ads_data_len.try_into()?),
             dest_netid:  target.netid(),
             dest_port:   U16::new(target.port()),
             src_netid:   self.source.netid(),
@@ -269,7 +313,7 @@ impl Client {
         // Collect the outgoing data.  Note, allocating a Vec and calling
         // `socket.write_all` only once is faster than writing in multiple
         // steps, even with TCP_NODELAY.
-        let mut request = Vec::with_capacity(HEADER_SIZE + data_in_len);
+        let mut request = Vec::with_capacity(ads_data_len);
         request.extend_from_slice(header.as_bytes());
         for buf in data_in {
             request.extend_from_slice(buf);
@@ -294,7 +338,7 @@ impl Client {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
         // Read the other fields we need.
-        assert!(reply.len() >= HEADER_SIZE);
+        assert!(reply.len() >= ADS_HEADER_SIZE);
         // TODO: use AdsHeader::read_from with zerocopy 0.6
         let mut ptr = &reply[22..];
         let ret_cmd = ptr.read_u16::<LE>().expect("size");
@@ -302,7 +346,7 @@ impl Client {
         let data_len = ptr.read_u32::<LE>().expect("size");
         let error_code = ptr.read_u32::<LE>().expect("size");
         let invoke_id = ptr.read_u32::<LE>().expect("size");
-        let result = if reply.len() >= HEADER_SIZE + 4 {
+        let result = if reply.len() >= ADS_HEADER_SIZE + 4 {
             ptr.read_u32::<LE>().expect("size")
         } else {
             0  // this must be because an error code is already set
@@ -346,7 +390,7 @@ impl Client {
 
         // Distribute the data into the user output buffers, up to the returned
         // data length.
-        let mut offset = HEADER_SIZE + 4;
+        let mut offset = ADS_HEADER_SIZE + 4;
         let mut rest_len = data_len;
         for buf in data_out {
             let n = buf.len().min(rest_len);
@@ -391,28 +435,39 @@ impl Reader {
                                        .unwrap_or_else(|_| Vec::with_capacity(DEFAULT_BUFFER_SIZE));
 
             // Read a header from the socket.
-            buf.resize(HEADER_SIZE, 0);
-            if self.socket.read_exact(&mut buf).ctx("reading packet header").is_err() {
+            buf.resize(AMS_HEADER_SIZE, 0);
+            if self.socket.read_exact(&mut buf).ctx("reading AMS packet header").is_err() {
                 // Not sending an error back; we don't know if something was
                 // requested or the socket was just closed from either side.
                 return;
             }
 
-            // If the header isn't self-consistent, abort the connection.
+            // Read the rest of the packet.
             let packet_length = LE::read_u32(&buf[2..6]) as usize;
-            let rest_length = LE::read_u32(&buf[26..30]) as usize;
-
-            // First two bytes must be zero, and the two length fields must agree.
-            if buf[..2] != [0, 0] || rest_length != packet_length - AMS_HEADER_SIZE {
-                let _ = self.reply_send.send(Err(Error::Reply("reading packet",
-                                                              "inconsistent packet", 0)));
+            buf.resize(AMS_HEADER_SIZE + packet_length, 0);
+            if let Err(e) = self.socket.read_exact(&mut buf[6..])
+                                       .ctx("reading rest of packet") {
+                let _ = self.reply_send.send(Err(e));
                 return;
             }
 
-            // Read the rest of the message.
-            buf.resize(HEADER_SIZE + rest_length, 0);
-            if let Err(e) = self.socket.read_exact(&mut buf[HEADER_SIZE..]).ctx("reading packet data") {
-                let _ = self.reply_send.send(Err(e));
+            // Is it something other than an ADS command packet?
+            let ams_cmd = LE::read_u16(&buf);
+            if ams_cmd != 0 {
+                // if it's a known packet type, continue
+                if matches!(ams_cmd, 1 | 4096 | 4097 | 4098) {
+                    continue;
+                }
+                let _ = self.reply_send.send(Err(Error::Reply(
+                    "reading packet", "invalid packet or unknown AMS command", ams_cmd as _)));
+                return;
+            }
+
+            // If the header length fields aren't self-consistent, abort the connection.
+            let rest_length = LE::read_u32(&buf[26..30]) as usize;
+            if rest_length != packet_length + AMS_HEADER_SIZE - ADS_HEADER_SIZE {
+                let _ = self.reply_send.send(Err(Error::Reply("reading packet",
+                                                              "inconsistent packet", 0)));
                 return;
             }
 
