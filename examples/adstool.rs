@@ -33,8 +33,8 @@ struct Args {
     ///
     /// The IP port defaults to 0xBF02 (TCP) and 0xBF03 (UDP).
     ///
-    /// An AMS address is required for `file`, `license`, `state`, `raw` and
-    /// `var`.  If it's not present, it is queried via UDP from the given
+    /// An AMS address is required for all subcommands except `addroute` and
+    /// `info`.  If it's not present, it is queried via UDP from the given
     /// hostname, but only the connected router (normally `.1.1`) can be reached
     /// in that way.
     ///
