@@ -387,6 +387,11 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     _ => ()
                 }
             }
+            println!();
+            let n = dev.read(ads::index::TARGET_DESC, 4, &mut xml)?;
+            println!("Platform: {}", String::from_utf8_lossy(&xml[..n-1]));
+            let n = dev.read(ads::index::TARGET_DESC, 7, &mut xml)?;
+            println!("Project name: {}", String::from_utf8_lossy(&xml[..n-1]));
         }
         Cmd::RouteList => {
             let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
