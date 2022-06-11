@@ -253,7 +253,7 @@ impl Client {
 
         // Create outgoing header.
         let header = AdsHeader {
-            padding:     0,
+            ams_cmd:     0,  // send command
             length:      U32::new((AMS_HEADER_SIZE + data_in_len).try_into()?),
             dest_netid:  target.netid(),
             dest_port:   U16::new(target.port()),
@@ -618,23 +618,26 @@ pub struct DeviceInfo {
 #[allow(missing_docs)]
 #[repr(u16)]
 pub enum AdsState {
-    Invalid   = 0,
-    Idle      = 1,
-    Reset     = 2,
-    Init      = 3,
-    Start     = 4,
-    Run       = 5,
-    Stop      = 6,
-    SaveCfg   = 7,
-    LoadCfg   = 8,
-    PowerFail = 9,
-    PowerGood = 10,
-    Error     = 11,
-    Shutdown  = 12,
-    Suspend   = 13,
-    Resume    = 14,
-    Config    = 15,
-    Reconfig  = 16,
+    Invalid      = 0,
+    Idle         = 1,
+    Reset        = 2,
+    Init         = 3,
+    Start        = 4,
+    Run          = 5,
+    Stop         = 6,
+    SaveCfg      = 7,
+    LoadCfg      = 8,
+    PowerFail    = 9,
+    PowerGood    = 10,
+    Error        = 11,
+    Shutdown     = 12,
+    Suspend      = 13,
+    Resume       = 14,
+    Config       = 15,
+    Reconfig     = 16,
+    Stopping     = 17,
+    Incompatible = 18,
+    Exception    = 19,
 }
 
 impl TryFrom<u16> for AdsState {
@@ -659,6 +662,9 @@ impl TryFrom<u16> for AdsState {
             14 => Self::Resume,
             15 => Self::Config,
             16 => Self::Reconfig,
+            17 => Self::Stopping,
+            18 => Self::Incompatible,
+            19 => Self::Exception,
             _  => return Err("invalid state constant")
         })
     }
@@ -686,6 +692,9 @@ impl FromStr for AdsState {
             "resume" => Self::Resume,
             "config" => Self::Config,
             "reconfig" => Self::Reconfig,
+            "stopping" => Self::Stopping,
+            "incompatible" => Self::Incompatible,
+            "exception" => Self::Exception,
             _  => return Err("invalid state name")
         })
     }
@@ -699,13 +708,27 @@ impl FromStr for AdsState {
 #[derive(AsBytes, FromBytes, Debug, Default)]
 #[repr(C)]
 pub(crate) struct AdsHeader {
-    pub padding:     u16,
+    /// 0x0 - ADS command
+    /// 0x1 - close port
+    /// 0x1000 - open port
+    /// 0x1001 - note from router (router state changed)
+    /// 0x1002 - get local netid
+    pub ams_cmd:     u16,
     pub length:      U32<LE>,
     pub dest_netid:  AmsNetId,
     pub dest_port:   U16<LE>,
     pub src_netid:   AmsNetId,
     pub src_port:    U16<LE>,
     pub command:     U16<LE>,
+    /// 0x01 - response
+    /// 0x02 - no return
+    /// 0x04 - ADS command
+    /// 0x08 - system command
+    /// 0x10 - high priority
+    /// 0x20 - with time stamp (8 bytes added)
+    /// 0x40 - UDP
+    /// 0x80 - command during init phase
+    /// 0x8000 - broadcast
     pub state_flags: U16<LE>,
     pub data_length: U32<LE>,
     pub error_code:  U32<LE>,

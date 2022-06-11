@@ -400,6 +400,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     Ok(n) if n >= 48 => {
                         let netid = ads::AmsNetId::from_slice(&routeinfo[..6]).unwrap();
                         let flags = LE::read_u32(&routeinfo[8..]);
+                        let _timeout = LE::read_u32(&routeinfo[12..]);
+                        let _max_frag = LE::read_u32(&routeinfo[16..]);
                         let hostlen = LE::read_u32(&routeinfo[32..]) as usize;
                         let namelen = LE::read_u32(&routeinfo[36..]) as usize;
                         let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen-1]);

@@ -72,6 +72,7 @@ pub const MGMT_SERVER: AmsPort = 19100;
 pub const MIELE_HOME_SERVER: AmsPort = 19200;
 pub const CP_LINK3: AmsPort = 19300;
 pub const VISION_SERVICE: AmsPort = 19500;
+pub const MULTIUSER: AmsPort = 19600;
 pub const DATABASE_SERVER: AmsPort = 21372;
 pub const FIAS_SERVER: AmsPort = 25013;
 pub const BANG_OLUFSEN_SERVER: AmsPort = 25015;

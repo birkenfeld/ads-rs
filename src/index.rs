@@ -63,8 +63,6 @@ pub const IO_CLEAR_I: u32 = 0xF040;
 pub const IO_CLEAR_O: u32 = 0xF050;
 pub const IO_RW_IOB: u32 = 0xF060;
 
-pub const DEVICE_DATA: u32 = 0xF100;
-
 /// Combine multiple index group/offset reads.
 /// See Beckhoff docs for the format of the data.
 pub const SUMUP_READ: u32 = 0xF080;
@@ -86,6 +84,8 @@ pub const SUMUP_ADDDEVNOTE: u32 = 0xF085;
 /// Combine multiple device notification deletes.
 /// See Beckhoff docs for the format of the data.
 pub const SUMUP_DELDEVNOTE: u32 = 0xF086;
+
+pub const DEVICE_DATA: u32 = 0xF100;
 
 /// File service: open a file.
 pub const FILE_OPEN: u32 = 120;

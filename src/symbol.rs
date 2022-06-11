@@ -73,9 +73,77 @@ pub struct Symbol {
     pub typ:       String,
     /// Total size of the symbol, in bytes.
     pub size:      usize,
-    /// Base type (not further documented).
+    /// Base type:
+    /// - 0 - void
+    /// - 2 - INT (i16)
+    /// - 3 - DINT (i32)
+    /// - 4 - REAL (f32)
+    /// - 5 - LREAL (f64)
+    /// - 16 - SINT (i8)
+    /// - 17 - USINT/BYTE (u8)
+    /// - 18 - UINT/WORD (u16)
+    /// - 19 - UDINT/DWORD (u32)
+    /// - 20 - LINT (i64)
+    /// - 21 - ULINT/LWORD (u64)
+    /// - 30 - STRING
+    /// - 31 - WSTRING
+    /// - 32 - REAL80 (f80)
+    /// - 33 - BOOL (u1)
+    /// - 65 - Other/Compound type
     pub base_type: u32,
-    /// Symbol flags (not further documented).
+    /// Symbol flags:
+    /// - 0x01 - Persistent
+    /// - 0x02 - Bit value
+    /// - 0x04 - Reference to
+    /// - 0x08 - Type GUID present
+    /// - 0x10 - TComInterfacePtr
+    /// - 0x20 - Read only
+    /// - 0x40 - ITF method access
+    /// - 0x80 - Method deref
+    /// - 0x0F00 - Context mask
+    /// - 0x1000 - Attributes present
+    /// - 0x2000 - Static
+    /// - 0x4000 - Init on reset
+    /// - 0x8000 - Extended flags present
+    pub flags:     u32,
+}
+
+/// Represents a type in the PLC's type inventory.
+pub struct Type {
+    /// Name of the type.
+    pub name:      String,
+    /// Total size of the type, in bytes.
+    pub size:      usize,
+    /// If the type is an array, (lower, upper) index bounds for all dimensions.
+    pub array:     Vec<(u32, u32)>,
+    /// If the type is a struct, all fields it contains.
+    pub fields:    Vec<Field>,
+    /// Base type (see [`Symbol::base_type`]).
+    pub base_type: u32,
+    /// Type flags:
+    /// - 0x01 - Data type
+    /// - 0x02 - Data item
+    /// - 0x04 - Reference to
+    /// - 0x08 - Method deref
+    /// - 0x10 - Oversample
+    /// - 0x20 - Bit values
+    /// - 0x40 - Prop item
+    /// - 0x80 - Type GUID present
+    /// - 0x0100 - Persistent
+    /// - 0x0200 - Copy mask
+    /// - 0x0400 - TComInterfacePtr
+    /// - 0x0800 - Method infos present
+    /// - 0x1000 - Attributes present
+    /// - 0x2000 - Enum infos present
+    /// - 0x010000 - Aligned
+    /// - 0x020000 - Static
+    /// - 0x040000 - Contains/Has Sp levels present
+    /// - 0x080000 - Ignore persistent data
+    /// - 0x100000 - Any size array
+    /// - 0x200000 - Persistent datatype
+    /// - 0x400000 - Init on reset
+    /// - 0x800000 - Is/Contains PLC pointer type
+    /// - 0x01000000 - Refactor infos present
     pub flags:     u32,
 }
 
@@ -92,25 +160,9 @@ pub struct Field {
     pub size:      usize,
     /// If the field is an array, (lower, upper) index bounds for all dimensions.
     pub array:     Vec<(u32, u32)>,
-    /// Base type (not further documented).
+    /// Base type (see [`Symbol::base_type`]).
     pub base_type: u32,
-    /// Symbol flags (not further documented).
-    pub flags:     u32,
-}
-
-/// Represents a type in the PLC's type inventory.
-pub struct Type {
-    /// Name of the type.
-    pub name:      String,
-    /// Total size of the type, in bytes.
-    pub size:      usize,
-    /// If the type is an array, (lower, upper) index bounds for all dimensions.
-    pub array:     Vec<(u32, u32)>,
-    /// If the type is a struct, all fields it contains.
-    pub fields:    Vec<Field>,
-    /// Base type (not further documented).
-    pub base_type: u32,
-    /// Symbol flags (not further documented).
+    /// Type flags (see [`Type::flags`]).
     pub flags:     u32,
 }
 
@@ -156,22 +208,33 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
         if version != 1 {
             return Err(Error::Reply(ctx, "unknown type info version", version));
         }
-        let _hash = ptr.read_u32::<LE>().ctx(ctx)?;
-        let _hash_base = ptr.read_u32::<LE>().ctx(ctx)?;
+        let _subitem_index = ptr.read_u16::<LE>().ctx(ctx)?;
+        let _plc_interface_id = ptr.read_u16::<LE>().ctx(ctx)?;
+        let _reserved = ptr.read_u32::<LE>().ctx(ctx)?;
         let size = ptr.read_u32::<LE>().ctx(ctx)? as usize;
         let offset = ptr.read_u32::<LE>().ctx(ctx)?;
         let base_type = ptr.read_u32::<LE>().ctx(ctx)?;
         let flags = ptr.read_u32::<LE>().ctx(ctx)?;
         let len_name = ptr.read_u16::<LE>().ctx(ctx)? as usize;
         let len_type = ptr.read_u16::<LE>().ctx(ctx)? as usize;
-        let len_comment = ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let _len_comment = ptr.read_u16::<LE>().ctx(ctx)? as usize;
         let array_dim = ptr.read_u16::<LE>().ctx(ctx)?;
         let sub_items = ptr.read_u16::<LE>().ctx(ctx)?;
         ptr.read_exact(&mut buf[..len_name + 1]).ctx(ctx)?;
         let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
         ptr.read_exact(&mut buf[..len_type + 1]).ctx(ctx)?;
         let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        ptr.read_exact(&mut buf[..len_comment + 1]).ctx(ctx)?;
+        // following fields (variable length), which we jump over:
+        // - comment with \0
+        // - array info
+        // - subitems info
+        // - type GUID if flags has Type GUID
+        // - copy mask of *size* bytes
+        // - # of methods and method entries if flags has Method infos
+        // - # of attributes and attributes if flags has Attributes
+        // - # of enum infos and enum infos if flags has Enum infos
+        // - refactor infos if flags has Refactor infos
+        // - splevels if flags has SP levels
 
         let mut array = vec![];
         for _ in 0..array_dim {
@@ -221,15 +284,21 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
         let ix_offset = entry_ptr.read_u32::<LE>().ctx(ctx)?;
         let size = entry_ptr.read_u32::<LE>().ctx(ctx)? as usize;
         let base_type = entry_ptr.read_u32::<LE>().ctx(ctx)?;
-        let flags = entry_ptr.read_u32::<LE>().ctx(ctx)?;
+        let flags = entry_ptr.read_u16::<LE>().ctx(ctx)? as u32;
+        let _legacy_array_dim = entry_ptr.read_u16::<LE>().ctx(ctx)?;
         let len_name = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
         let len_type = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
-        let len_comment = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let _len_comment = entry_ptr.read_u16::<LE>().ctx(ctx)? as usize;
         entry_ptr.read_exact(&mut buf[..len_name + 1]).ctx(ctx)?;
         let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
         entry_ptr.read_exact(&mut buf[..len_type + 1]).ctx(ctx)?;
         let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        entry_ptr.read_exact(&mut buf[..len_comment + 1]).ctx(ctx)?;
+        // following fields (variable length), which we jump over:
+        // - comment with \0
+        // - type GUID if flags has Type GUID
+        // - # of attributes and attribute entries if flags has Attributes
+        // - flags2 if flags has Extended flags
+        // - if flags2 has Old names
 
         symbols.push(Symbol { name, ix_group, ix_offset, typ, size, base_type, flags });
 
