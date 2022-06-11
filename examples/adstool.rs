@@ -51,6 +51,8 @@ enum Cmd {
     Info,
     /// Query extended information about the system over ADS.
     TargetDesc,
+    /// Query and display the list of ADS routes on the system.
+    RouteList,
     File(FileAction),
     License(LicenseAction),
     State(StateArgs),
@@ -383,6 +385,32 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     Ok(Event::Eof) => break,
                     Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),
                     _ => ()
+                }
+            }
+        }
+        Cmd::RouteList => {
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let dev = client.device(amsaddr);
+            let mut routeinfo = [0; 2048];
+            println!("{:-20} {:-22} {:-18} Flags", "Name", "NetID", "Host/IP");
+            for subindex in 0.. {
+                match dev.read(ads::index::ROUTE_LIST, subindex, &mut routeinfo) {
+                    Err(ads::Error::Ads(_, _, 0x716)) => break,
+                    Err(other) => return Err(Error::Lib(other)),
+                    Ok(n) if n >= 48 => {
+                        let netid = ads::AmsNetId::from_slice(&routeinfo[..6]).unwrap();
+                        let flags = LE::read_u32(&routeinfo[8..]);
+                        let hostlen = LE::read_u32(&routeinfo[32..]) as usize;
+                        let namelen = LE::read_u32(&routeinfo[36..]) as usize;
+                        let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen-1]);
+                        let name = String::from_utf8_lossy(&routeinfo[44+hostlen..][..namelen-1]);
+                        print!("{:-20} {:-22} {:-18}", name, netid.to_string(), host);
+                        if flags & 0x01 != 0 { print!(" temporary"); }
+                        if flags & 0x80 != 0 { print!(" unidirectional"); }
+                        if flags & 0x100 != 0 { print!(" virtual/nat"); }
+                        println!();
+                    }
+                    _ => println!("Route entry {} too short", subindex),
                 }
             }
         }
