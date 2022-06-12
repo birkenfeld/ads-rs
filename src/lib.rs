@@ -27,10 +27,10 @@
 //!
 //! // Request a handle to a named symbol in the PLC instance.
 //! let handle = ads::Handle::new(device, "MY_SYMBOL")?;
+//!
 //! // Read data in form of an u32 from the handle.
-//! let mut data = [0; 4];
-//! handle.read(&mut data)?;
-//! println!("MY_SYMBOL value is {}", u32::from_le_bytes(data));
+//! let value: u32 = handle.read_value()?;
+//! println!("MY_SYMBOL value is {}", value);
 //! ```
 
 #![deny(missing_docs)]
