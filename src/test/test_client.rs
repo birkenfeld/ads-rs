@@ -1,5 +1,6 @@
 //! Test for the TCP client.
 
+use std::convert::TryFrom;
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
@@ -172,5 +173,50 @@ fn test_bad_notification() {
         assert!(chan.try_recv().is_err());
 
         // Notification is automatically deleted at end of scope.
+    })
+}
+
+#[test]
+fn test_string_type() {
+    crate::make_string_type!(String5, 5);
+
+    run_test(ServerOpts::default(), |device| {
+        let bstr = String5::try_from("abc").unwrap();
+        assert!(<[u8; 5]>::from(bstr) == [b'a', b'b', b'c', 0, 0]);
+
+        assert!(String5::try_from("abcdef").is_err());
+
+        let bstr = String5::try_from(&b"abc"[..]).unwrap();
+        assert!(<[u8; 5]>::from(bstr) == [b'a', b'b', b'c', 0, 0]);
+
+        device.write_value(0x4020, 7, &bstr).unwrap();
+
+        let ret = device.read_value::<String5>(0x4020, 7).unwrap();
+        assert!(<[u8; 5]>::from(ret) == [b'a', b'b', b'c', 0, 0]);
+        assert!(String::try_from(ret).unwrap() == "abc");
+        assert!(<Vec<u8>>::try_from(ret).unwrap() == [b'a', b'b', b'c']);
+    })
+}
+
+#[test]
+fn test_wstring_type() {
+    crate::make_wstring_type!(WString5, 5);
+
+    run_test(ServerOpts::default(), |device| {
+        let bstr = WString5::try_from("abc").unwrap();
+        assert!(<[u16; 5]>::from(bstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+
+        assert!(WString5::try_from(&[1, 2, 3, 4, 5, 6][..]).is_err());
+        assert!(WString5::try_from("abcdef").is_err());
+
+        let bstr = WString5::try_from(&[b'a' as u16, b'b' as u16, b'c' as u16][..]).unwrap();
+        assert!(<[u16; 5]>::from(bstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+
+        device.write_value(0x4020, 7, &bstr).unwrap();
+
+        let ret = device.read_value::<WString5>(0x4020, 7).unwrap();
+        assert!(<[u16; 5]>::from(ret) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+        assert!(String::try_from(ret).unwrap() == "abc");
+        assert!(<Vec<u16>>::try_from(ret).unwrap() == [b'a' as u16, b'b' as u16, b'c' as u16]);
     })
 }

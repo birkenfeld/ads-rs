@@ -2,10 +2,12 @@
 
 ## 0.4.0 -- Jun 2022 (unreleased)
 
-- Support asking the AMS router for an open port.  This is required
-  when connecting to a PLC on 127.0.0.1.
-- Support for directly reading Rust types from `Device`s and
-  `symbol::Handle`s using `read_value`/`write_value`.
+- Support asking the AMS router for an open port.  This is required when
+  connecting to a PLC on 127.0.0.1.
+- Support for directly reading Rust types from `Device`s and `symbol::Handle`s
+  using `read_value`/`write_value`.
+- Add the `strings` module with the possibility to create fixed-length string
+  types corresponding to the PLC's `STRING` and `WSTRING`.
 - Add more known ADS states.
 - Document the `symbol::Symbol` and `symbol::Type` flags.
 - Add an adstool command to list AMS routes on the target.

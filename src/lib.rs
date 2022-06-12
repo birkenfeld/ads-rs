@@ -44,6 +44,7 @@ pub mod errors;
 pub mod ports;
 pub mod index;
 pub mod file;
+pub mod strings;
 pub mod symbol;
 #[cfg(test)]
 mod test;
