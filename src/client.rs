@@ -568,6 +568,20 @@ impl<'c> Device<'c> {
         Ok(())
     }
 
+    /// Read data of given type.
+    ///
+    /// Any type that supports `zerocopy::FromBytes` can be read.  You can also
+    /// derive that trait on your own structures and read structured data
+    /// directly from the symbol.
+    ///
+    /// Note: to be independent of the host's byte order, use the integer types
+    /// defined in `zerocopy::byteorder`.
+    pub fn read_value<T: Default + AsBytes + FromBytes>(&self, index_group: u32, index_offset: u32) -> Result<T> {
+        let mut buf = T::default();
+        self.read_exact(index_group, index_offset, buf.as_bytes_mut())?;
+        Ok(buf)
+    }
+
     /// Write some data to a given index group/offset.
     pub fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
         let header = IndexLength {
@@ -578,6 +592,13 @@ impl<'c> Device<'c> {
         self.client.communicate(Command::Write, self.addr,
                                 &[header.as_bytes(), data], &mut [])?;
         Ok(())
+    }
+
+    /// Write data of given type.
+    ///
+    /// See `read_value` for details.
+    pub fn write_value<T: AsBytes>(&self, index_group: u32, index_offset: u32, value: &T) -> Result<()> {
+        self.write(index_group, index_offset, value.as_bytes())
     }
 
     /// Write some data to a given index group/offset and then read back some

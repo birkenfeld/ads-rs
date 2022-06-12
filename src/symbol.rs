@@ -5,6 +5,7 @@ use std::convert::TryInto;
 use std::io::Read;
 
 use byteorder::{ByteOrder, LE, ReadBytesExt};
+use zerocopy::{AsBytes, FromBytes};
 
 use crate::errors::{Error, ErrContext};
 use crate::index;
@@ -35,6 +36,25 @@ impl<'c> Handle<'c> {
     /// Write data to the variable.
     pub fn write(&self, buf: &[u8]) -> Result<()> {
         self.device.write(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
+    }
+
+    /// Read data of given type.
+    ///
+    /// Any type that supports `zerocopy::FromBytes` can be read.  You can also
+    /// derive that trait on your own structures and read structured data
+    /// directly from the symbol.
+    ///
+    /// Note: to be independent of the host's byte order, use the integer types
+    /// defined in `zerocopy::byteorder`.
+    pub fn read_value<T: Default + AsBytes + FromBytes>(&self) -> Result<T> {
+        self.device.read_value(index::RW_SYMVAL_BYHANDLE, self.handle)
+    }
+
+    /// Write data of given type.
+    ///
+    /// See `read_value` for details.
+    pub fn write_value<T: AsBytes>(&self, value: &T) -> Result<()> {
+        self.device.write_value(index::RW_SYMVAL_BYHANDLE, self.handle, value)
     }
 }
 

@@ -77,6 +77,9 @@ fn test_readwrite() {
                          Err(Error::Ads(_, _, 0x702))));
         assert!(matches!(device.read_exact(0x4020, 98765, &mut buf),
                          Err(Error::Ads(_, _, 0x703))));
+
+        device.write_value(0x4020, 7, &0xdeadbeef_u32).unwrap();
+        assert!(device.read_value::<u32>(0x4020, 7).unwrap() == 0xdeadbeef);
     })
 }
 
@@ -112,10 +115,14 @@ fn test_symbolaccess() {
         let handle = Handle::new(device, "SYMBOL").unwrap();
         assert!(handle.write(&[1, 2, 3, 4, 5]).is_err());
         assert!(handle.read(&mut [0; 5]).is_err());
+
         handle.write(&[4, 3, 2, 1]).unwrap();
         let mut buf = [0; 4];
         handle.read(&mut buf).unwrap();
         assert!(buf == [4, 3, 2, 1]);
+
+        handle.write_value(&0xdeadbeef_u32).unwrap();
+        assert!(handle.read_value::<u32>().unwrap() == 0xdeadbeef);
     })
 }
 
