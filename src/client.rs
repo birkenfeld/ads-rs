@@ -61,10 +61,10 @@ impl Command {
     }
 }
 
-/// Size of the AMS/TCP + ADS headers
+/// Size of the AMS/TCP + AMS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
-const AMS_HEADER_SIZE: usize = 6;
-const ADS_HEADER_SIZE: usize = 38;  // including AMS header
+const TCP_HEADER_SIZE: usize = 6;
+const AMS_HEADER_SIZE: usize = 38;  // including AMS/TCP header
 const DEFAULT_BUFFER_SIZE: usize = 100;
 
 /// Holds the different timeouts that will be used by the Client.
@@ -308,7 +308,7 @@ impl Client {
         let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
 
         // Create outgoing header.
-        let ads_data_len = ADS_HEADER_SIZE - AMS_HEADER_SIZE + data_in_len;
+        let ads_data_len = AMS_HEADER_SIZE - TCP_HEADER_SIZE + data_in_len;
         let header = AdsHeader {
             ams_cmd:     0,  // send command
             length:      U32::new(ads_data_len.try_into()?),
@@ -351,7 +351,7 @@ impl Client {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
         // Read the other fields we need.
-        assert!(reply.len() >= ADS_HEADER_SIZE);
+        assert!(reply.len() >= AMS_HEADER_SIZE);
         // TODO: use AdsHeader::read_from with zerocopy 0.6
         let mut ptr = &reply[22..];
         let ret_cmd = ptr.read_u16::<LE>().expect("size");
@@ -359,7 +359,7 @@ impl Client {
         let data_len = ptr.read_u32::<LE>().expect("size");
         let error_code = ptr.read_u32::<LE>().expect("size");
         let invoke_id = ptr.read_u32::<LE>().expect("size");
-        let result = if reply.len() >= ADS_HEADER_SIZE + 4 {
+        let result = if reply.len() >= AMS_HEADER_SIZE + 4 {
             ptr.read_u32::<LE>().expect("size")
         } else {
             0  // this must be because an error code is already set
@@ -403,7 +403,7 @@ impl Client {
 
         // Distribute the data into the user output buffers, up to the returned
         // data length.
-        let mut offset = ADS_HEADER_SIZE + 4;
+        let mut offset = AMS_HEADER_SIZE + 4;
         let mut rest_len = data_len;
         for buf in data_out {
             let n = buf.len().min(rest_len);
@@ -448,7 +448,7 @@ impl Reader {
                                        .unwrap_or_else(|_| Vec::with_capacity(DEFAULT_BUFFER_SIZE));
 
             // Read a header from the socket.
-            buf.resize(AMS_HEADER_SIZE, 0);
+            buf.resize(TCP_HEADER_SIZE, 0);
             if self.socket.read_exact(&mut buf).ctx("reading AMS packet header").is_err() {
                 // Not sending an error back; we don't know if something was
                 // requested or the socket was just closed from either side.
@@ -457,7 +457,7 @@ impl Reader {
 
             // Read the rest of the packet.
             let packet_length = LE::read_u32(&buf[2..6]) as usize;
-            buf.resize(AMS_HEADER_SIZE + packet_length, 0);
+            buf.resize(TCP_HEADER_SIZE + packet_length, 0);
             if let Err(e) = self.socket.read_exact(&mut buf[6..])
                                        .ctx("reading rest of packet") {
                 let _ = self.reply_send.send(Err(e));
@@ -478,7 +478,7 @@ impl Reader {
 
             // If the header length fields aren't self-consistent, abort the connection.
             let rest_length = LE::read_u32(&buf[26..30]) as usize;
-            if rest_length != packet_length + AMS_HEADER_SIZE - ADS_HEADER_SIZE {
+            if rest_length != packet_length + TCP_HEADER_SIZE - AMS_HEADER_SIZE {
                 let _ = self.reply_send.send(Err(Error::Reply("reading packet",
                                                               "inconsistent packet", 0)));
                 return;

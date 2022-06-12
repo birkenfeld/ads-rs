@@ -6,7 +6,7 @@ authors = ["Georg Brandl <g.brandl@fz-juelich.de>"]
 license = "MIT/Apache-2.0"
 description = "Client for the Beckhoff Automation Device Specification protocol for PLCs"
 repository = "https://github.com/birkenfeld/ads-rs"
-keywords = ["Beckhoff", "ADS", "automation", "device", "PLC"]
+keywords = ["Beckhoff", "AMS", "ADS", "automation", "device", "PLC"]
 
 [dependencies]
 byteorder = "1.4.3"
