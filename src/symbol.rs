@@ -217,24 +217,14 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
         let flags = ptr.read_u32::<LE>().ctx(ctx)?;
         let len_name = ptr.read_u16::<LE>().ctx(ctx)? as usize;
         let len_type = ptr.read_u16::<LE>().ctx(ctx)? as usize;
-        let _len_comment = ptr.read_u16::<LE>().ctx(ctx)? as usize;
+        let len_comment = ptr.read_u16::<LE>().ctx(ctx)? as usize;
         let array_dim = ptr.read_u16::<LE>().ctx(ctx)?;
         let sub_items = ptr.read_u16::<LE>().ctx(ctx)?;
         ptr.read_exact(&mut buf[..len_name + 1]).ctx(ctx)?;
         let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
         ptr.read_exact(&mut buf[..len_type + 1]).ctx(ctx)?;
         let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        // following fields (variable length), which we jump over:
-        // - comment with \0
-        // - array info
-        // - subitems info
-        // - type GUID if flags has Type GUID
-        // - copy mask of *size* bytes
-        // - # of methods and method entries if flags has Method infos
-        // - # of attributes and attributes if flags has Attributes
-        // - # of enum infos and enum infos if flags has Enum infos
-        // - refactor infos if flags has Refactor infos
-        // - splevels if flags has SP levels
+        ptr.read_exact(&mut buf[..len_comment + 1]).ctx(ctx)?;
 
         let mut array = vec![];
         for _ in 0..array_dim {
@@ -260,6 +250,16 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
                 decode_type_info(sub_ptr, Some(&mut typinfo))?;
                 ptr = rest;
             }
+
+            // following fields (variable length), which we jump over:
+            // - type GUID if flags has Type GUID
+            // - copy mask of *size* bytes
+            // - # of methods and method entries if flags has Method infos
+            // - # of attributes and attributes if flags has Attributes
+            // - # of enum infos and enum infos if flags has Enum infos
+            // - refactor infos if flags has Refactor infos
+            // - splevels if flags has SP levels
+
             Ok(Some(typinfo))
         }
     }
