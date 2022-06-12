@@ -592,7 +592,7 @@ impl<'c> Device<'c> {
     /// This function only returns Err on errors that cause the whole sum-up
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single read can have returned its
-    /// own error.  The [`ReadRequest.get`] method will return either the
+    /// own error.  The [`ReadRequest::data`] method will return either the
     /// returned data or the error for each read.
     pub fn read_multi(&self, requests: &mut [ReadRequest]) -> Result<()> {
         let nreq = requests.len();
@@ -644,7 +644,7 @@ impl<'c> Device<'c> {
     /// This function only returns Err on errors that cause the whole sum-up
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single write can have returned its
-    /// own error.  The [`WriteRequest.ensure`] method will return the error for
+    /// own error.  The [`WriteRequest::ensure`] method will return the error for
     /// each write.
     pub fn write_multi(&self, requests: &mut [WriteRequest]) -> Result<()> {
         let nreq = requests.len();
@@ -701,9 +701,9 @@ impl<'c> Device<'c> {
     ///
     /// This function only returns Err on errors that cause the whole sum-up
     /// request to fail (e.g. if the device doesn't support such requests).  If
-    /// the request as a whole succeeds, each single write can have returned its
-    /// own error.  The [`WriteRequest.ensure`] method will return the error for
-    /// each write.
+    /// the request as a whole succeeds, each single write/read can have
+    /// returned its own error.  The [`WriteReadRequest::data`] method will
+    /// return either the returned data or the error for each write/read.
     pub fn write_read_multi(&self, requests: &mut [WriteReadRequest]) -> Result<()> {
         let nreq = requests.len();
         let rlen = requests.iter().map(|r| size_of::<ResultLength>() + r.rbuf.len()).sum::<usize>();
@@ -783,11 +783,77 @@ impl<'c> Device<'c> {
         Ok(handle.get())
     }
 
+    /// Add multiple notification handles.
+    ///
+    /// This function only returns Err on errors that cause the whole sum-up
+    /// request to fail (e.g. if the device doesn't support such requests).  If
+    /// the request as a whole succeeds, each single read can have returned its
+    /// own error.  The [`AddNotifRequest::handle`] method will return either
+    /// the returned handle or the error for each read.
+    pub fn add_notification_multi(&self, requests: &mut [AddNotifRequest]) -> Result<()> {
+        let nreq = requests.len();
+        let rlen = size_of::<ResultLength>() * nreq;
+        let wlen = size_of::<AddNotif>() * nreq;
+        let header = IndexLengthRW {
+            index_group:  U32::new(crate::index::SUMUP_ADDDEVNOTE),
+            index_offset: U32::new(nreq as u32),
+            read_length:  U32::new(rlen.try_into()?),
+            write_length: U32::new(wlen.try_into()?),
+        };
+        let mut read_len = U32::<LE>::new(0);
+        let mut w_buffers = vec![header.as_bytes()];
+        let mut r_buffers = vec![read_len.as_bytes_mut()];
+        for req in requests.iter_mut() {
+            w_buffers.push(req.req.as_bytes());
+            r_buffers.push(req.res.as_bytes_mut());
+        }
+        self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+        for req in requests {
+            if let Ok(handle) = req.handle() {
+                self.client.notif_handles.borrow_mut().insert((self.addr, handle));
+            }
+        }
+        Ok(())
+    }
+
     /// Delete a notification with given handle.
     pub fn delete_notification(&self, handle: notif::Handle) -> Result<()> {
         self.client.communicate(Command::DeleteNotification, self.addr,
                                 &[U32::<LE>::new(handle).as_bytes()], &mut [])?;
         self.client.notif_handles.borrow_mut().remove(&(self.addr, handle));
+        Ok(())
+    }
+
+    /// Delete multiple notification handles.
+    ///
+    /// This function only returns Err on errors that cause the whole sum-up
+    /// request to fail (e.g. if the device doesn't support such requests).  If
+    /// the request as a whole succeeds, each single read can have returned its
+    /// own error.  The [`DelNotifRequest::ensure`] method will return either the
+    /// returned data or the error for each read.
+    pub fn delete_notification_multi(&self, requests: &mut [DelNotifRequest]) -> Result<()> {
+        let nreq = requests.len();
+        let rlen = size_of::<u32>() * nreq;
+        let wlen = size_of::<u32>() * nreq;
+        let header = IndexLengthRW {
+            index_group:  U32::new(crate::index::SUMUP_DELDEVNOTE),
+            index_offset: U32::new(nreq as u32),
+            read_length:  U32::new(rlen.try_into()?),
+            write_length: U32::new(wlen.try_into()?),
+        };
+        let mut read_len = U32::<LE>::new(0);
+        let mut w_buffers = vec![header.as_bytes()];
+        let mut r_buffers = vec![read_len.as_bytes_mut()];
+        for req in requests.iter_mut() {
+            w_buffers.push(req.req.as_bytes());
+            r_buffers.push(req.res.as_bytes_mut());
+        }
+        self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+        for req in requests {
+            if req.ensure().is_ok() {
+                self.client.notif_handles.borrow_mut().remove(&(self.addr, req.req.get()));
+            }
+        }
         Ok(())
     }
 }
@@ -1011,7 +1077,7 @@ impl<'buf> ReadRequest<'buf> {
     /// Get the actual returned data.
     ///
     /// If the request returned an error, returns Err.
-    pub fn get(&self) -> Result<&[u8]> {
+    pub fn data(&self) -> Result<&[u8]> {
         if self.res.result.get() != 0 {
             ads_error("multi-read data", self.res.result.get())
         } else {
@@ -1062,7 +1128,8 @@ pub struct WriteReadRequest<'buf> {
 }
 
 impl<'buf> WriteReadRequest<'buf> {
-    /// Create the request with given index group, index offset and input and result buffers.
+    /// Create the request with given index group, index offset and input and
+    /// result buffers.
     pub fn new(index_group: u32, index_offset: u32, write_buffer: &'buf [u8],
                read_buffer: &'buf mut [u8]) -> Self {
         Self {
@@ -1081,7 +1148,7 @@ impl<'buf> WriteReadRequest<'buf> {
     /// Get the actual returned data.
     ///
     /// If the request returned an error, returns Err.
-    pub fn get(&self) -> Result<&[u8]> {
+    pub fn data(&self) -> Result<&[u8]> {
         if self.res.result.get() != 0 {
             ads_error("multi-read/write data", self.res.result.get())
         } else {
@@ -1089,6 +1156,71 @@ impl<'buf> WriteReadRequest<'buf> {
         }
     }
 }
+
+/// A single request for a [`Device::add_notification_multi`] request.
+pub struct AddNotifRequest {
+    req:  AddNotif,
+    res:  ResultLength, // length is the handle
+}
+
+impl AddNotifRequest {
+    /// Create the request with given index group, index offset and notification
+    /// attributes.
+    pub fn new(index_group: u32, index_offset: u32, attributes: &notif::Attributes) -> Self {
+        Self {
+            req: AddNotif {
+                index_group:  U32::new(index_group),
+                index_offset: U32::new(index_offset),
+                length:       U32::new(attributes.length as u32),
+                trans_mode:   U32::new(attributes.trans_mode as u32),
+                max_delay:    U32::new(attributes.max_delay.as_millis() as u32),
+                cycle_time:   U32::new(attributes.cycle_time.as_millis() as u32),
+                reserved:     [0; 16],
+            },
+            res: ResultLength::default(),
+        }
+    }
+
+    /// Get the returned notification handle.
+    ///
+    /// If the request returned an error, returns Err.
+    pub fn handle(&self) -> Result<notif::Handle> {
+        if self.res.result.get() != 0 {
+            ads_error("multi-read/write data", self.res.result.get())
+        } else {
+            Ok(self.res.length.get())
+        }
+    }
+}
+
+/// A single request for a [`Device::delete_notification_multi`] request.
+pub struct DelNotifRequest {
+    req:  U32<LE>,
+    res:  U32<LE>,
+}
+
+impl DelNotifRequest {
+    /// Create the request with given index group, index offset and notification
+    /// attributes.
+    pub fn new(handle: notif::Handle) -> Self {
+        Self {
+            req: U32::new(handle),
+            res: U32::default(),
+        }
+    }
+
+    /// Verify that the handle was successfully deleted.
+    ///
+    /// If the request returned an error, returns Err.
+    pub fn ensure(&self) -> Result<()> {
+        if self.res.get() != 0 {
+            ads_error("multi-read/write data", self.res.get())
+        } else {
+            Ok(())
+        }
+    }
+}
+
 
 fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
     // Calculate the initial (using buffer sizes) and actual (using result

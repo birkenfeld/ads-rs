@@ -334,6 +334,25 @@ impl Server {
                 out.extend(mdata);
                 out.extend(rdata);
             }
+            index::SUMUP_ADDDEVNOTE => {
+                out.write_u32::<LE>(8 * off).unwrap();
+                for i in 0..off as usize {
+                    let (d, e) = self.do_add_notif(&data[16 + i*40..][..40]);
+                    out.write_u32::<LE>(e).unwrap();
+                    if d.len() > 4 {
+                        out.extend(&d[4..]);
+                    } else {
+                        out.write_u32::<LE>(0).unwrap();
+                    }
+                }
+            }
+            index::SUMUP_DELDEVNOTE => {
+                out.write_u32::<LE>(4 * off).unwrap();
+                for i in 0..off as usize {
+                    let (_, e) = self.do_del_notif(&data[16 + i*4..][..4]);
+                    out.write_u32::<LE>(e).unwrap();
+                }
+            }
             index::FILE_OPEN => {
                 if &data[16..] != b"/etc/passwd" {
                     return (vec![], 0x70C);

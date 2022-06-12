@@ -108,8 +108,8 @@ fn test_multi_requests() {
             ReadRequest::new(0x7689, 5, &mut buf3),
         ];
         device.read_multi(&mut reqs).unwrap();
-        assert!(reqs[0].get().unwrap() == b"AB01234567");
-        assert!(reqs[1].get().unwrap() == b"0123456789");
+        assert!(reqs[0].data().unwrap() == b"AB01234567");
+        assert!(reqs[1].data().unwrap() == b"0123456789");
 
         let mut reqs = vec![
             WriteReadRequest::new(FILE_OPEN, 0, b"/etc/passwd", &mut buf1),
@@ -118,10 +118,10 @@ fn test_multi_requests() {
             WriteReadRequest::new(0x7689, 5, b"blub", &mut buf3),
         ];
         device.write_read_multi(&mut reqs).unwrap();
-        assert!(reqs[0].get().unwrap() == 42u32.to_le_bytes());
-        assert!(reqs[1].get().unwrap() == b"\0\0\0\0\0\0\0\0\0\0");
-        assert!(reqs[2].get().unwrap() == b"");
-        assert!(reqs[3].get().is_err());
+        assert!(reqs[0].data().unwrap() == 42u32.to_le_bytes());
+        assert!(reqs[1].data().unwrap() == b"\0\0\0\0\0\0\0\0\0\0");
+        assert!(reqs[2].data().unwrap() == b"");
+        assert!(reqs[3].data().is_err());
     });
 }
 
@@ -196,6 +196,32 @@ fn test_notification() {
         assert_eq!(second.samples().next().unwrap(),
                    Sample { handle, timestamp: 0x9988776655443322, data: &[8, 8, 1, 1] });
     })
+}
+
+#[test]
+fn test_multi_notification() {
+    use crate::notif::*;
+    use crate::client::*;
+    use std::time::Duration;
+    run_test(ServerOpts::default(), |device| {
+        let attrib = Attributes::new(4, TransmissionMode::ServerOnChange,
+                                     Duration::from_secs(1), Duration::from_secs(1));
+        let mut reqs = [
+            AddNotifRequest::new(0x4020, 7, &attrib),
+            AddNotifRequest::new(0x6789, 0, &attrib),
+        ];
+        device.add_notification_multi(&mut reqs).unwrap();
+        let handle = reqs[0].handle().unwrap();
+        assert!(reqs[1].handle().is_err());
+
+        let mut reqs = [
+            DelNotifRequest::new(handle),
+            DelNotifRequest::new(42),
+        ];
+        device.delete_notification_multi(&mut reqs).unwrap();
+        assert!(reqs[0].ensure().is_ok());
+        assert!(reqs[1].ensure().is_err());
+    });
 }
 
 #[test]
