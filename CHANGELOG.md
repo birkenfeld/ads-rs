@@ -9,6 +9,7 @@
 - Add more known ADS states.
 - Document the `symbol::Symbol` and `symbol::Type` flags.
 - Add an adstool command to list AMS routes on the target.
+- Add an adstool subcommand to list type inventory.
 
 ## 0.3.1 -- May 2022
 

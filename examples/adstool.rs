@@ -196,6 +196,11 @@ enum VarAction {
         /// a filter for the returned symbol names
         filter: Option<String>,
     },
+    /// List type definitions.
+    ListTypes {
+        /// a filter for the returned symbol names
+        filter: Option<String>,
+    },
     /// Read a variable by name.
     #[structopt(group = ArgGroup::with_name("spec"))]
     Read {
@@ -568,28 +573,37 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
             let dev = client.device(amsaddr);
 
+            fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32,
+                            typ: &str, level: usize) {
+                for field in &type_map[typ].fields {
+                    if let Some(offset) = field.offset {
+                        let indent = (0..2*level).map(|_| ' ').collect::<String>();
+                        println!("     {:6x} ({:6x}) {}.{:5$} {}", base_offset + offset,
+                                 field.size, indent, field.name, field.typ, 39-2*level);
+                        print_fields(type_map, base_offset + offset, &field.typ, level+1);
+                    }
+                }
+            }
+
             match subargs {
                 VarAction::List { filter } => {
                     let (symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
-
-                    fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32,
-                                    typ: &str, level: usize) {
-                        for field in &type_map[typ].fields {
-                            if let Some(offset) = field.offset {
-                                let indent = (0..2*level).map(|_| ' ').collect::<String>();
-                                println!("     {:6x} ({:6x}) {}.{:5$} {}", base_offset + offset,
-                                         field.size, indent, field.name, field.typ, 39-2*level);
-                                print_fields(type_map, base_offset + offset, &field.typ, level+1);
-                            }
-                        }
-                    }
-
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
                             println!("{:4x}:{:6x} ({:6x}) {:40} {}",
                                      sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
                             print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
+                        }
+                    }
+                }
+                VarAction::ListTypes { filter } => {
+                    let (_symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
+                    let filter = filter.unwrap_or_default().to_lowercase();
+                    for (name, ty) in &type_map {
+                        if name.to_lowercase().contains(&filter) {
+                            println!("{:40} ({:6x})", name, ty.size);
+                            print_fields(&type_map, 0, &name, 1);
                         }
                     }
                 }
