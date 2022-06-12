@@ -6,6 +6,8 @@
   connecting to a PLC on 127.0.0.1.
 - Support for directly reading Rust types from `Device`s and `symbol::Handle`s
   using `read_value`/`write_value`.
+- Support the "sum-up" requests from `Device`, which can run multiple
+  read/write/read-write requests in a single ADS request-reply cycle.
 - Add the `strings` module with the possibility to create fixed-length string
   types corresponding to the PLC's `STRING` and `WSTRING`.
 - Add more known ADS states.

@@ -85,6 +85,47 @@ fn test_readwrite() {
 }
 
 #[test]
+fn test_multi_requests() {
+    use crate::index::*;
+    use crate::client::*;
+    run_test(ServerOpts::default(), |device| {
+        let mut buf1 = *b"ABCDEFGHIJ";
+        let mut buf2 = *b"0123456789";
+        let mut buf3 = *b"-----";
+        let mut reqs = vec![
+            WriteRequest::new(0x4020, 7, &buf1),
+            WriteRequest::new(0x4020, 9, &buf2),
+            WriteRequest::new(0x6789, 5, &buf3),
+        ];
+        device.write_multi(&mut reqs).unwrap();
+        assert!(reqs[0].ensure().is_ok());
+        assert!(reqs[1].ensure().is_ok());
+        assert!(reqs[2].ensure().is_err());
+
+        let mut reqs = vec![
+            ReadRequest::new(0x4020, 7, &mut buf1),
+            ReadRequest::new(0x4020, 9, &mut buf2),
+            ReadRequest::new(0x7689, 5, &mut buf3),
+        ];
+        device.read_multi(&mut reqs).unwrap();
+        assert!(reqs[0].get().unwrap() == b"AB01234567");
+        assert!(reqs[1].get().unwrap() == b"0123456789");
+
+        let mut reqs = vec![
+            WriteReadRequest::new(FILE_OPEN, 0, b"/etc/passwd", &mut buf1),
+            WriteReadRequest::new(FILE_READ, 0, b"", &mut buf2),
+            WriteReadRequest::new(FILE_CLOSE, 42, b"", &mut []),
+            WriteReadRequest::new(0x7689, 5, b"blub", &mut buf3),
+        ];
+        device.write_read_multi(&mut reqs).unwrap();
+        assert!(reqs[0].get().unwrap() == 42u32.to_le_bytes());
+        assert!(reqs[1].get().unwrap() == b"\0\0\0\0\0\0\0\0\0\0");
+        assert!(reqs[2].get().unwrap() == b"");
+        assert!(reqs[3].get().is_err());
+    });
+}
+
+#[test]
 fn test_fileaccess() {
     use crate::file::*;
     run_test(ServerOpts::default(), |device| {

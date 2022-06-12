@@ -4,12 +4,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::convert::{TryFrom, TryInto};
 use std::io::{self, Read, Write};
+use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::time::Duration;
 
 use byteorder::{ByteOrder, ReadBytesExt, LE};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
 use crate::notif;
@@ -582,6 +584,40 @@ impl<'c> Device<'c> {
         Ok(buf)
     }
 
+    /// Read multiple index groups/offsets with one ADS request (a "sum-up" request).
+    ///
+    /// The returned data can be shorter than the buffer in each case, the `length`
+    /// member of the `ReadRequest` is set to the returned length.
+    ///
+    /// This function only returns Err on errors that cause the whole sum-up
+    /// request to fail (e.g. if the device doesn't support such requests).  If
+    /// the request as a whole succeeds, each single read can have returned its
+    /// own error.  The [`ReadRequest.get`] method will return either the
+    /// returned data or the error for each read.
+    pub fn read_multi(&self, requests: &mut [ReadRequest]) -> Result<()> {
+        let nreq = requests.len();
+        let rlen = requests.iter().map(|r| size_of::<ResultLength>() + r.rbuf.len()).sum::<usize>();
+        let wlen = size_of::<IndexLength>() * nreq;
+        let header = IndexLengthRW {
+            // using SUMUP_READ_EX_2 since would return the actual returned
+            // number of bytes, and no empty bytes if the read is short,
+            // but then we'd have to reshuffle the buffers
+            index_group:  U32::new(crate::index::SUMUP_READ_EX),
+            index_offset: U32::new(nreq as u32),
+            read_length:  U32::new(rlen.try_into()?),
+            write_length: U32::new(wlen.try_into()?),
+        };
+        let mut w_buffers = vec![header.as_bytes()];
+        let mut r_buffers = (0..2*nreq).map(|_| &mut [][..]).collect_vec();
+        for (i, req) in requests.iter_mut().enumerate() {
+            w_buffers.push(req.req.as_bytes());
+            r_buffers[i] = req.res.as_bytes_mut();
+            r_buffers[nreq + i] = req.rbuf;
+        }
+        self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+        Ok(())
+    }
+
     /// Write some data to a given index group/offset.
     pub fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
         let header = IndexLength {
@@ -599,6 +635,35 @@ impl<'c> Device<'c> {
     /// See `read_value` for details.
     pub fn write_value<T: AsBytes>(&self, index_group: u32, index_offset: u32, value: &T) -> Result<()> {
         self.write(index_group, index_offset, value.as_bytes())
+    }
+
+    /// Write multiple index groups/offsets with one ADS request (a "sum-up" request).
+    ///
+    /// This function only returns Err on errors that cause the whole sum-up
+    /// request to fail (e.g. if the device doesn't support such requests).  If
+    /// the request as a whole succeeds, each single write can have returned its
+    /// own error.  The [`WriteRequest.ensure`] method will return the error for
+    /// each write.
+    pub fn write_multi(&self, requests: &mut [WriteRequest]) -> Result<()> {
+        let nreq = requests.len();
+        let rlen = size_of::<u32>() * nreq;
+        let wlen = requests.iter().map(|r| size_of::<IndexLength>() + r.wbuf.len()).sum::<usize>();
+        let header = IndexLengthRW {
+            index_group:  U32::new(crate::index::SUMUP_WRITE),
+            index_offset: U32::new(nreq as u32),
+            read_length:  U32::new(rlen.try_into()?),
+            write_length: U32::new(wlen.try_into()?),
+        };
+        let mut w_buffers = vec![&[][..]; 2*nreq + 1];
+        let mut r_buffers = vec![];
+        w_buffers[0] = header.as_bytes();
+        for (i, req) in requests.iter_mut().enumerate() {
+            w_buffers[1 + i] = req.req.as_bytes();
+            w_buffers[1 + nreq + i] = req.wbuf;
+            r_buffers.push(req.res.as_bytes_mut());
+        }
+        self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+        Ok(())
     }
 
     /// Write some data to a given index group/offset and then read back some
@@ -626,6 +691,39 @@ impl<'c> Device<'c> {
         if len != read_data.len() {
             return Err(Error::Reply("write/read data", "got less data than expected", len as u32));
         }
+        Ok(())
+    }
+
+    /// Write multiple index groups/offsets with one ADS request (a "sum-up" request).
+    ///
+    /// This function only returns Err on errors that cause the whole sum-up
+    /// request to fail (e.g. if the device doesn't support such requests).  If
+    /// the request as a whole succeeds, each single write can have returned its
+    /// own error.  The [`WriteRequest.ensure`] method will return the error for
+    /// each write.
+    pub fn write_read_multi(&self, requests: &mut [WriteReadRequest]) -> Result<()> {
+        let nreq = requests.len();
+        let rlen = requests.iter().map(|r| size_of::<ResultLength>() + r.rbuf.len()).sum::<usize>();
+        let wlen = requests.iter().map(|r| size_of::<IndexLengthRW>() + r.wbuf.len()).sum::<usize>();
+        let header = IndexLengthRW {
+            index_group:  U32::new(crate::index::SUMUP_READWRITE),
+            index_offset: U32::new(nreq as u32),
+            read_length:  U32::new(rlen.try_into()?),
+            write_length: U32::new(wlen.try_into()?),
+        };
+        let mut w_buffers = vec![&[][..]; 2*nreq + 1];
+        let mut r_buffers = (0..2*nreq).map(|_| &mut [][..]).collect_vec();
+        w_buffers[0] = header.as_bytes();
+        for (i, req) in requests.iter_mut().enumerate() {
+            w_buffers[1 + i] = req.req.as_bytes();
+            w_buffers[1 + nreq + i] = req.wbuf;
+            r_buffers[i] = req.res.as_bytes_mut();
+            r_buffers[nreq + i] = req.rbuf;
+        }
+        self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+        // unfortunately SUMUP_READWRITE returns only the actual read bytes for each
+        // request, so if there are short reads the buffers got filled wrongly
+        fixup_write_read_return_buffers(requests);
         Ok(())
     }
 
@@ -843,6 +941,13 @@ pub(crate) struct IndexLength {
 
 #[derive(FromBytes, AsBytes, Default)]
 #[repr(C)]
+pub(crate) struct ResultLength {
+    pub result:       U32<LE>,
+    pub length:       U32<LE>,
+}
+
+#[derive(FromBytes, AsBytes, Default)]
+#[repr(C)]
 pub(crate) struct IndexLengthRW {
     pub index_group:  U32<LE>,
     pub index_offset: U32<LE>,
@@ -875,4 +980,184 @@ pub(crate) struct AddNotif {
     pub max_delay:    U32<LE>,
     pub cycle_time:   U32<LE>,
     pub reserved:     [u8; 16],
+}
+
+/// A single request for a [`Device::read_multi`] request.
+pub struct ReadRequest<'buf> {
+    req:  IndexLength,
+    res:  ResultLength,
+    rbuf: &'buf mut [u8],
+}
+
+impl<'buf> ReadRequest<'buf> {
+    /// Create the request with given index group, index offset and result buffer.
+    pub fn new(index_group: u32, index_offset: u32, buffer: &'buf mut [u8]) -> Self {
+        Self {
+            req: IndexLength {
+                index_group:  U32::new(index_group),
+                index_offset: U32::new(index_offset),
+                length:       U32::new(buffer.len() as u32),
+            },
+            res: ResultLength::default(),
+            rbuf: buffer
+        }
+    }
+
+    /// Get the actual returned data.
+    ///
+    /// If the request returned an error, returns Err.
+    pub fn get(&self) -> Result<&[u8]> {
+        if self.res.result.get() != 0 {
+            ads_error("multi-read data", self.res.result.get())
+        } else {
+            Ok(&self.rbuf[..self.res.length.get() as usize])
+        }
+    }
+}
+
+/// A single request for a [`Device::write_multi`] request.
+pub struct WriteRequest<'buf> {
+    req:  IndexLength,
+    res:  U32<LE>,
+    wbuf: &'buf [u8],
+}
+
+impl<'buf> WriteRequest<'buf> {
+    /// Create the request with given index group, index offset and input buffer.
+    pub fn new(index_group: u32, index_offset: u32, buffer: &'buf [u8]) -> Self {
+        Self {
+            req: IndexLength {
+                index_group:  U32::new(index_group),
+                index_offset: U32::new(index_offset),
+                length:       U32::new(buffer.len() as u32),
+            },
+            res: U32::default(),
+            wbuf: buffer
+        }
+    }
+
+    /// Verify that the data was successfully written.
+    ///
+    /// If the request returned an error, returns Err.
+    pub fn ensure(&self) -> Result<()> {
+        if self.res.get() != 0 {
+            ads_error("multi-read data", self.res.get())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A single request for a [`Device::write_read_multi`] request.
+pub struct WriteReadRequest<'buf> {
+    req:  IndexLengthRW,
+    res:  ResultLength,
+    wbuf: &'buf [u8],
+    rbuf: &'buf mut [u8],
+}
+
+impl<'buf> WriteReadRequest<'buf> {
+    /// Create the request with given index group, index offset and input and result buffers.
+    pub fn new(index_group: u32, index_offset: u32, write_buffer: &'buf [u8],
+               read_buffer: &'buf mut [u8]) -> Self {
+        Self {
+            req: IndexLengthRW {
+                index_group:  U32::new(index_group),
+                index_offset: U32::new(index_offset),
+                read_length:  U32::new(read_buffer.len() as u32),
+                write_length: U32::new(write_buffer.len() as u32),
+            },
+            res:  ResultLength::default(),
+            wbuf: write_buffer,
+            rbuf: read_buffer,
+        }
+    }
+
+    /// Get the actual returned data.
+    ///
+    /// If the request returned an error, returns Err.
+    pub fn get(&self) -> Result<&[u8]> {
+        if self.res.result.get() != 0 {
+            ads_error("multi-read data", self.res.result.get())
+        } else {
+            Ok(&self.rbuf[..self.res.length.get() as usize])
+        }
+    }
+}
+
+fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
+    // Calculate the initial (using buffer sizes) and actual (using result
+    // sizes) offsets of each request.
+    let offsets = requests.iter().scan((0, 0), |(init_cum, act_cum), req| {
+        let (init, act) = (req.rbuf.len(), req.res.length.get() as usize);
+        let current = Some((*init_cum, *act_cum, init, act));
+        assert!(init >= act);
+        *init_cum += init;
+        *act_cum += act;
+        current
+    }).collect_vec();
+
+    // Go through the buffers in reverse order.
+    for i in (0..requests.len()).rev() {
+        let (my_initial, my_actual, _, mut size) = offsets[i];
+        if my_initial == my_actual {
+            // Offsets match, no further action required since all
+            // previous buffers must be of full length too.
+            break;
+        }
+
+        // Check in which buffer our last byte is.
+        let mut j = offsets[..i+1].iter().rposition(|r| r.0 < my_actual + size)
+                                         .expect("index must be somewhere");
+        let mut j_end = my_actual + size - offsets[j].0;
+
+        // Copy the required number of bytes from every buffer from j up to i.
+        loop {
+            let n = j_end.min(size);
+            size -= n;
+            if i == j {
+                requests[i].rbuf.copy_within(j_end-n..j_end, size);
+            } else {
+                let (first, second) = requests.split_at_mut(i);
+                second[0].rbuf[size..][..n].copy_from_slice(&first[j].rbuf[j_end-n..j_end]);
+            }
+            if size == 0 {
+                break;
+            }
+            j -= 1;
+            j_end = offsets[j].2;
+        }
+    }
+}
+
+#[test]
+fn test_fixup_buffers() {
+    let mut buf0 = *b"12345678AB";
+    let mut buf1 = *b"CDEFabc";
+    let mut buf2 = *b"dxyUVW";
+    let mut buf3 = *b"XYZY";
+    let mut buf4 = *b"XW----";
+    let mut buf5 = *b"-------------";
+    let reqs = &mut [
+        WriteReadRequest::new(0, 0, &[], &mut buf0),
+        WriteReadRequest::new(0, 0, &[], &mut buf1),
+        WriteReadRequest::new(0, 0, &[], &mut buf2),
+        WriteReadRequest::new(0, 0, &[], &mut buf3),
+        WriteReadRequest::new(0, 0, &[], &mut buf4),
+        WriteReadRequest::new(0, 0, &[], &mut buf5),
+    ];
+    reqs[0].res.length.set(8);
+    reqs[1].res.length.set(6);
+    reqs[2].res.length.set(0);
+    reqs[3].res.length.set(4);
+    reqs[4].res.length.set(2);
+    reqs[5].res.length.set(9);
+
+    fixup_write_read_return_buffers(reqs);
+
+    assert!(&reqs[5].rbuf[..9] == b"UVWXYZYXW");
+    assert!(&reqs[4].rbuf[..2] == b"xy");
+    assert!(&reqs[3].rbuf[..4] == b"abcd");
+    assert!(&reqs[1].rbuf[..6] == b"ABCDEF");
+    assert!(&reqs[0].rbuf[..8] == b"12345678");
 }

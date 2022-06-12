@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use byteorder::{ReadBytesExt, WriteBytesExt, LE};
+use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
 use zerocopy::{
     byteorder::{U32, U64},
@@ -92,7 +92,7 @@ impl Server {
                 }
                 panic!("unexpected receive error: {}", e);
             }
-            println!("req: {:?}", header);
+            println!(">>> {:?}", header);
             let mut data = vec![0; header.data_length.get() as usize];
             socket.read_exact(&mut data).unwrap();
 
@@ -133,7 +133,7 @@ impl Server {
             if !opts.ignore_invokeid {
                 reply_header.invoke_id = header.invoke_id;
             }
-            println!("rep: {:?}", reply_header);
+            println!("<<< {:?}", reply_header);
 
             socket.write_all(reply_header.as_bytes()).unwrap();
             socket.write_all(&reply_data).unwrap();
@@ -217,17 +217,18 @@ impl Server {
         // TODO: when using zerocopy > 0.3, replace by `read_from`.
         let mut request = IndexLength::default();
         request.as_bytes_mut().copy_from_slice(data);
+        let grp = request.index_group.get();
         let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
         let mut out = Vec::new();
         out.write_u32::<LE>(0).unwrap();
         // Simulate symbol access.
-        if request.index_group.get() == index::RW_SYMVAL_BYHANDLE {
+        if grp == index::RW_SYMVAL_BYHANDLE {
             if off != 77 {
                 return (vec![], 0x710);
             }
             off = 1020; // symbol lives at the end of self.data
-        } else if request.index_group.get() != index::PLC_RW_M {
+        } else if grp != index::PLC_RW_M {
             return (vec![], 0x702);
         }
         if off + len > self.data.len() {
@@ -244,20 +245,21 @@ impl Server {
         }
         let mut request = IndexLength::default();
         request.as_bytes_mut().copy_from_slice(&data[..12]);
+        let grp = request.index_group.get();
         let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
 
-        if request.index_group.get() == index::RW_SYMVAL_BYHANDLE {
+        if grp == index::RW_SYMVAL_BYHANDLE {
             if off != 77 {
                 return (vec![], 0x710);
             }
             off = 1020;
-        } else if request.index_group.get() == index::RELEASE_SYMHANDLE {
+        } else if grp == index::RELEASE_SYMHANDLE {
             if off != 77 {
                 return (vec![], 0x710);
             }
             return (0u32.to_le_bytes().into(), 0);
-        } else if request.index_group.get() != index::PLC_RW_M {
+        } else if grp != index::PLC_RW_M {
             return (vec![], 0x702);
         }
         if off + len > self.data.len() {
@@ -283,6 +285,48 @@ impl Server {
 
         // Simulate file and symbol access.
         match request.index_group.get() {
+            index::SUMUP_READ_EX => {
+                let mut rdata: Vec<u8> = vec![];
+                for i in 0..off as usize {
+                    let rlen = LE::read_u32(&data[16 + i*12 + 8..]) as usize;
+                    let (mut d, e) = self.do_read(&data[16 + i*12..][..12]);
+                    out.write_u32::<LE>(e).unwrap();
+                    d.resize(rlen + 8, 0);
+                    out.write_u32::<LE>(d.len() as u32 - 8).unwrap();
+                    rdata.extend(&d[8..]);
+                }
+                out.extend(rdata);
+            }
+            index::SUMUP_WRITE => {
+                let mut woff = 16 + off as usize*12;
+                for i in 0..off as usize {
+                    let wlen = LE::read_u32(&data[16 + i*12 + 8..]) as usize;
+                    let mut subdata = data[16 + i*12..][..12].to_vec();
+                    subdata.extend(&data[woff..][..wlen]);
+                    woff += wlen;
+                    let (_, e) = self.do_write(&subdata);
+                    out.write_u32::<LE>(e).unwrap();
+                }
+            }
+            index::SUMUP_READWRITE => {
+                let mut rdata: Vec<u8> = vec![];
+                let mut woff = 16 + off as usize*16;
+                for i in 0..off as usize {
+                    let wlen = LE::read_u32(&data[16 + i*16 + 12..]) as usize;
+                    let mut subdata = data[16 + i*16..][..16].to_vec();
+                    subdata.extend(&data[woff..][..wlen]);
+                    woff += wlen;
+                    let (d, e) = self.do_read_write(&subdata);
+                    out.write_u32::<LE>(e).unwrap();
+                    if d.len() > 8 {
+                        out.write_u32::<LE>(d.len() as u32 - 8).unwrap();
+                        rdata.extend(&d[8..]);
+                    } else {
+                        out.write_u32::<LE>(0).unwrap();
+                    }
+                }
+                out.extend(rdata);
+            }
             index::FILE_OPEN => {
                 if &data[16..] != b"/etc/passwd" {
                     return (vec![], 0x70C);
@@ -302,12 +346,12 @@ impl Server {
                 if off != 42 {
                     return (vec![], 0x70C);
                 }
-                out.write_i32::<LE>(0).unwrap();
+                out.write_u32::<LE>(0).unwrap();
                 self.file_ptr = None;
             }
             index::FILE_WRITE => {
                 if let Some((true, ptr)) = &mut self.file_ptr {
-                    out.write_i32::<LE>(0).unwrap();
+                    out.write_u32::<LE>(0).unwrap();
                     *ptr += wlen;
                 } else {
                     return (vec![], 0x704);
@@ -332,14 +376,14 @@ impl Server {
                     // send an unknown error number
                     return (vec![], 0xFFFF);
                 }
-                out.write_i32::<LE>(0).unwrap();
+                out.write_u32::<LE>(0).unwrap();
             }
             index::GET_SYMHANDLE_BYNAME => {
                 if &data[16..] != b"SYMBOL" {
                     return (vec![], 0x710);
                 }
-                out.write_i32::<LE>(4).unwrap();
-                out.write_i32::<LE>(77).unwrap();
+                out.write_u32::<LE>(4).unwrap();
+                out.write_u32::<LE>(77).unwrap();
             }
             _ => return (vec![], 0x702),
         }
