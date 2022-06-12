@@ -31,10 +31,28 @@ macro_rules! make_string_type {
         pub struct $name([u8; $len], u8);  // one extra NULL byte
 
         impl $name {
-            fn new() -> Self {
+            /// Create a new empty string.
+            pub fn new() -> Self {
                 Self([0; $len], 0)
             }
+
+            /// Return the number of bytes up to the first null byte.
+            pub fn len(&self) -> usize {
+                self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len())
+            }
+
+            /// Get the slice up to the first null byte.
+            pub fn as_bytes(&self) -> &[u8] {
+                &self.0[..self.len()]
+            }
+
+            /// Get a reference to the full array of bytes.
+            pub fn backing_array(&mut self) -> &mut [u8; $len] {
+                &mut self.0
+            }
         }
+
+        // standard traits
 
         impl std::default::Default for $name {
             fn default() -> Self {
@@ -44,8 +62,25 @@ macro_rules! make_string_type {
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-                let nullpos = self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len());
-                std::fmt::Debug::fmt(&String::from_utf8_lossy(&self.0[..nullpos]), fmt)
+                std::fmt::Debug::fmt(&String::from_utf8_lossy(self.as_bytes()), fmt)
+            }
+        }
+
+        impl std::cmp::PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                self.as_bytes() == other.as_bytes()
+            }
+        }
+
+        impl std::cmp::PartialEq<&[u8]> for $name {
+            fn eq(&self, other: &&[u8]) -> bool {
+                self.as_bytes() == *other
+            }
+        }
+
+        impl std::cmp::PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.as_bytes() == other.as_bytes()
             }
         }
 
@@ -79,8 +114,7 @@ macro_rules! make_string_type {
 
         impl std::convert::From<$name> for std::vec::Vec<u8> {
             fn from(bstr: $name) -> Self {
-                let nullpos = bstr.0.iter().position(|&b| b == 0).unwrap_or(bstr.0.len());
-                bstr.0[..nullpos].to_vec()
+                bstr.as_bytes().to_vec()
             }
         }
 
@@ -95,9 +129,8 @@ macro_rules! make_string_type {
 
         impl std::convert::TryFrom<$name> for std::string::String {
             type Error = std::str::Utf8Error;
-            fn try_from(bytes: $name) -> std::result::Result<Self, Self::Error> {
-                let nullpos = bytes.0.iter().position(|&b| b == 0).unwrap_or(bytes.0.len());
-                std::str::from_utf8(&bytes.0[..nullpos]).map(Into::into)
+            fn try_from(bstr: $name) -> std::result::Result<Self, Self::Error> {
+                std::str::from_utf8(bstr.as_bytes()).map(Into::into)
             }
         }
 
@@ -141,8 +174,24 @@ macro_rules! make_wstring_type {
         pub struct $name([u16; $len], u16);  // one extra NULL byte
 
         impl $name {
-            fn new() -> Self {
+            /// Create a new empty string.
+            pub fn new() -> Self {
                 Self([0; $len], 0)
+            }
+
+            /// Return the number of code units up to the first null.
+            pub fn len(&self) -> usize {
+                self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len())
+            }
+
+            /// Get the slice up to the first null code unit.
+            pub fn as_slice(&self) -> &[u16] {
+                &self.0[..self.len()]
+            }
+
+            /// Get a reference to the full array of code units.
+            pub fn backing_array(&mut self) -> &mut [u16; $len] {
+                &mut self.0
             }
         }
 
@@ -159,6 +208,24 @@ macro_rules! make_wstring_type {
                     .map(|ch| ch.unwrap_or(std::char::REPLACEMENT_CHARACTER))
                     .collect();
                 std::fmt::Debug::fmt(&fmted, fmt)
+            }
+        }
+
+        impl std::cmp::PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                self.as_slice() == other.as_slice()
+            }
+        }
+
+        impl std::cmp::PartialEq<&[u16]> for $name {
+            fn eq(&self, other: &&[u16]) -> bool {
+                self.as_slice() == *other
+            }
+        }
+
+        impl std::cmp::PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.as_slice().iter().cloned().eq(other.encode_utf16())
             }
         }
 
@@ -192,8 +259,7 @@ macro_rules! make_wstring_type {
 
         impl std::convert::From<$name> for std::vec::Vec<u16> {
             fn from(wstr: $name) -> Self {
-                let nullpos = wstr.0.iter().position(|&b| b == 0).unwrap_or(wstr.0.len());
-                wstr.0[..nullpos].to_vec()
+                wstr.as_slice().to_vec()
             }
         }
 

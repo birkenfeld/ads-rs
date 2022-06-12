@@ -181,13 +181,18 @@ fn test_string_type() {
     crate::make_string_type!(String5, 5);
 
     run_test(ServerOpts::default(), |device| {
-        let bstr = String5::try_from("abc").unwrap();
+        let mut bstr = String5::try_from("abc").unwrap();
         assert!(<[u8; 5]>::from(bstr) == [b'a', b'b', b'c', 0, 0]);
+        assert!(bstr == &b"abc"[..]);
+        assert!(bstr == "abc");
+        assert!(bstr.len() == 3);
+        assert!(bstr.backing_array().len() == 5);
 
         assert!(String5::try_from("abcdef").is_err());
 
-        let bstr = String5::try_from(&b"abc"[..]).unwrap();
-        assert!(<[u8; 5]>::from(bstr) == [b'a', b'b', b'c', 0, 0]);
+        let bstr2 = String5::try_from(&b"abc"[..]).unwrap();
+        assert!(<[u8; 5]>::from(bstr2) == [b'a', b'b', b'c', 0, 0]);
+        assert!(bstr == bstr2);
 
         assert!(format!("{:?}", bstr) == "\"abc\"");
 
@@ -205,16 +210,21 @@ fn test_wstring_type() {
     crate::make_wstring_type!(WString5, 5);
 
     run_test(ServerOpts::default(), |device| {
-        let wstr = WString5::try_from("abc").unwrap();
+        let mut wstr = WString5::try_from("abc").unwrap();
         assert!(<[u16; 5]>::from(wstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+        assert!(wstr == &[b'a' as u16, b'b' as u16, b'c' as u16][..]);
+        assert!(wstr == "abc");
+        assert!(wstr.len() == 3);
+        assert!(wstr.backing_array().len() == 5);
 
         assert!(WString5::try_from(&[1, 2, 3, 4, 5, 6][..]).is_err());
         assert!(WString5::try_from("abcdef").is_err());
 
         assert!(format!("{:?}", wstr) == "\"abc\"");
 
-        let wstr = WString5::try_from(&[b'a' as u16, b'b' as u16, b'c' as u16][..]).unwrap();
-        assert!(<[u16; 5]>::from(wstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+        let wstr2 = WString5::try_from(&[b'a' as u16, b'b' as u16, b'c' as u16][..]).unwrap();
+        assert!(<[u16; 5]>::from(wstr2) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+        assert!(wstr == wstr2);
 
         device.write_value(0x4020, 7, &wstr).unwrap();
 
