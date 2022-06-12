@@ -272,6 +272,16 @@ impl Client {
 
     /// Return a wrapper that executes operations for a target device (known by
     /// NetID and port).
+    ///
+    /// The local NetID `127.0.0.1.1.1` is mapped to the client's source NetID,
+    /// so that you can connect to a local PLC using:
+    ///
+    /// ```rust,ignore
+    /// let client = Client::new("127.0.0.1", ..., Source::Request);
+    /// let device = client.device(AmsAddr::new(AmsNetId::local(), 851));
+    /// ```
+    ///
+    /// without knowing its NetID.
     pub fn device(&self, mut addr: AmsAddr) -> Device<'_> {
         if addr.netid() == AmsNetId::local() {
             addr = AmsAddr::new(self.source().netid(), addr.port());
