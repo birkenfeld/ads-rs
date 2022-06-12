@@ -286,19 +286,23 @@ impl Server {
         // Simulate file and symbol access.
         match request.index_group.get() {
             index::SUMUP_READ_EX => {
+                let mut mdata: Vec<u8> = vec![];
                 let mut rdata: Vec<u8> = vec![];
                 for i in 0..off as usize {
                     let rlen = LE::read_u32(&data[16 + i*12 + 8..]) as usize;
                     let (mut d, e) = self.do_read(&data[16 + i*12..][..12]);
-                    out.write_u32::<LE>(e).unwrap();
+                    mdata.write_u32::<LE>(e).unwrap();
                     d.resize(rlen + 8, 0);
-                    out.write_u32::<LE>(d.len() as u32 - 8).unwrap();
+                    mdata.write_u32::<LE>(d.len() as u32 - 8).unwrap();
                     rdata.extend(&d[8..]);
                 }
+                out.write_u32::<LE>((mdata.len() + rdata.len()) as u32).unwrap();
+                out.extend(mdata);
                 out.extend(rdata);
             }
             index::SUMUP_WRITE => {
                 let mut woff = 16 + off as usize*12;
+                out.write_u32::<LE>(4 * off).unwrap();
                 for i in 0..off as usize {
                     let wlen = LE::read_u32(&data[16 + i*12 + 8..]) as usize;
                     let mut subdata = data[16 + i*12..][..12].to_vec();
@@ -309,6 +313,7 @@ impl Server {
                 }
             }
             index::SUMUP_READWRITE => {
+                let mut mdata: Vec<u8> = vec![];
                 let mut rdata: Vec<u8> = vec![];
                 let mut woff = 16 + off as usize*16;
                 for i in 0..off as usize {
@@ -317,14 +322,16 @@ impl Server {
                     subdata.extend(&data[woff..][..wlen]);
                     woff += wlen;
                     let (d, e) = self.do_read_write(&subdata);
-                    out.write_u32::<LE>(e).unwrap();
+                    mdata.write_u32::<LE>(e).unwrap();
                     if d.len() > 8 {
-                        out.write_u32::<LE>(d.len() as u32 - 8).unwrap();
+                        mdata.write_u32::<LE>(d.len() as u32 - 8).unwrap();
                         rdata.extend(&d[8..]);
                     } else {
-                        out.write_u32::<LE>(0).unwrap();
+                        mdata.write_u32::<LE>(0).unwrap();
                     }
                 }
+                out.write_u32::<LE>((mdata.len() + rdata.len()) as u32).unwrap();
+                out.extend(mdata);
                 out.extend(rdata);
             }
             index::FILE_OPEN => {

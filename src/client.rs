@@ -607,12 +607,14 @@ impl<'c> Device<'c> {
             read_length:  U32::new(rlen.try_into()?),
             write_length: U32::new(wlen.try_into()?),
         };
+        let mut read_len = U32::<LE>::new(0);
         let mut w_buffers = vec![header.as_bytes()];
-        let mut r_buffers = (0..2*nreq).map(|_| &mut [][..]).collect_vec();
+        let mut r_buffers = (0..2*nreq + 1).map(|_| &mut [][..]).collect_vec();
+        r_buffers[0] = read_len.as_bytes_mut();
         for (i, req) in requests.iter_mut().enumerate() {
             w_buffers.push(req.req.as_bytes());
-            r_buffers[i] = req.res.as_bytes_mut();
-            r_buffers[nreq + i] = req.rbuf;
+            r_buffers[1 + i] = req.res.as_bytes_mut();
+            r_buffers[1 + nreq + i] = req.rbuf;
         }
         self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
         Ok(())
@@ -654,8 +656,9 @@ impl<'c> Device<'c> {
             read_length:  U32::new(rlen.try_into()?),
             write_length: U32::new(wlen.try_into()?),
         };
+        let mut read_len = U32::<LE>::new(0);
         let mut w_buffers = vec![&[][..]; 2*nreq + 1];
-        let mut r_buffers = vec![];
+        let mut r_buffers = vec![read_len.as_bytes_mut()];
         w_buffers[0] = header.as_bytes();
         for (i, req) in requests.iter_mut().enumerate() {
             w_buffers[1 + i] = req.req.as_bytes();
@@ -711,14 +714,16 @@ impl<'c> Device<'c> {
             read_length:  U32::new(rlen.try_into()?),
             write_length: U32::new(wlen.try_into()?),
         };
+        let mut read_len = U32::<LE>::new(0);
         let mut w_buffers = vec![&[][..]; 2*nreq + 1];
-        let mut r_buffers = (0..2*nreq).map(|_| &mut [][..]).collect_vec();
+        let mut r_buffers = (0..2*nreq + 1).map(|_| &mut [][..]).collect_vec();
         w_buffers[0] = header.as_bytes();
+        r_buffers[0] = read_len.as_bytes_mut();
         for (i, req) in requests.iter_mut().enumerate() {
             w_buffers[1 + i] = req.req.as_bytes();
             w_buffers[1 + nreq + i] = req.wbuf;
-            r_buffers[i] = req.res.as_bytes_mut();
-            r_buffers[nreq + i] = req.rbuf;
+            r_buffers[1 + i] = req.res.as_bytes_mut();
+            r_buffers[1 + nreq + i] = req.rbuf;
         }
         self.client.communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
         // unfortunately SUMUP_READWRITE returns only the actual read bytes for each
@@ -1041,7 +1046,7 @@ impl<'buf> WriteRequest<'buf> {
     /// If the request returned an error, returns Err.
     pub fn ensure(&self) -> Result<()> {
         if self.res.get() != 0 {
-            ads_error("multi-read data", self.res.get())
+            ads_error("multi-write data", self.res.get())
         } else {
             Ok(())
         }
@@ -1078,7 +1083,7 @@ impl<'buf> WriteReadRequest<'buf> {
     /// If the request returned an error, returns Err.
     pub fn get(&self) -> Result<&[u8]> {
         if self.res.result.get() != 0 {
-            ads_error("multi-read data", self.res.result.get())
+            ads_error("multi-read/write data", self.res.result.get())
         } else {
             Ok(&self.rbuf[..self.res.length.get() as usize])
         }
