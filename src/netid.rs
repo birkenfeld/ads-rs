@@ -32,6 +32,11 @@ impl AmsNetId {
         AmsNetId([a, b, c, d, e, f])
     }
 
+    /// Return the "local NetID", `127.0.0.1.1.1`.
+    pub const fn local() -> Self {
+        AmsNetId([127, 0, 0, 1, 1, 1])
+    }
+
     /// Create a NetID from a slice (which must have length 6).
     pub fn from_slice(slice: &[u8]) -> Option<Self> {
         Some(AmsNetId(slice.try_into().ok()?))

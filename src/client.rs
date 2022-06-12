@@ -272,7 +272,10 @@ impl Client {
 
     /// Return a wrapper that executes operations for a target device (known by
     /// NetID and port).
-    pub fn device(&self, addr: AmsAddr) -> Device<'_> {
+    pub fn device(&self, mut addr: AmsAddr) -> Device<'_> {
+        if addr.netid() == AmsNetId::local() {
+            addr = AmsAddr::new(self.source().netid(), addr.port());
+        }
         Device { client: self, addr }
     }
 
