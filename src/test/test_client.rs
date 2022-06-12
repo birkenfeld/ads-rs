@@ -189,6 +189,8 @@ fn test_string_type() {
         let bstr = String5::try_from(&b"abc"[..]).unwrap();
         assert!(<[u8; 5]>::from(bstr) == [b'a', b'b', b'c', 0, 0]);
 
+        assert!(format!("{:?}", bstr) == "\"abc\"");
+
         device.write_value(0x4020, 7, &bstr).unwrap();
 
         let ret = device.read_value::<String5>(0x4020, 7).unwrap();
@@ -203,16 +205,18 @@ fn test_wstring_type() {
     crate::make_wstring_type!(WString5, 5);
 
     run_test(ServerOpts::default(), |device| {
-        let bstr = WString5::try_from("abc").unwrap();
-        assert!(<[u16; 5]>::from(bstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+        let wstr = WString5::try_from("abc").unwrap();
+        assert!(<[u16; 5]>::from(wstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
 
         assert!(WString5::try_from(&[1, 2, 3, 4, 5, 6][..]).is_err());
         assert!(WString5::try_from("abcdef").is_err());
 
-        let bstr = WString5::try_from(&[b'a' as u16, b'b' as u16, b'c' as u16][..]).unwrap();
-        assert!(<[u16; 5]>::from(bstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+        assert!(format!("{:?}", wstr) == "\"abc\"");
 
-        device.write_value(0x4020, 7, &bstr).unwrap();
+        let wstr = WString5::try_from(&[b'a' as u16, b'b' as u16, b'c' as u16][..]).unwrap();
+        assert!(<[u16; 5]>::from(wstr) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
+
+        device.write_value(0x4020, 7, &wstr).unwrap();
 
         let ret = device.read_value::<WString5>(0x4020, 7).unwrap();
         assert!(<[u16; 5]>::from(ret) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);

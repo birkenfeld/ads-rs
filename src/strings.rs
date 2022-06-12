@@ -42,6 +42,13 @@ macro_rules! make_string_type {
             }
         }
 
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let nullpos = self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len());
+                std::fmt::Debug::fmt(&String::from_utf8_lossy(&self.0[..nullpos]), fmt)
+            }
+        }
+
         // conversion with [u8; N]
 
         impl std::convert::From<[u8; $len]> for $name {
@@ -142,6 +149,16 @@ macro_rules! make_wstring_type {
         impl std::default::Default for $name {
             fn default() -> Self {
                 Self::new()
+            }
+        }
+
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+                let fmted: String =
+                    std::char::decode_utf16(self.0.iter().cloned().take_while(|&b| b != 0))
+                    .map(|ch| ch.unwrap_or(std::char::REPLACEMENT_CHARACTER))
+                    .collect();
+                std::fmt::Debug::fmt(&fmted, fmt)
             }
         }
 
