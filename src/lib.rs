@@ -15,7 +15,8 @@
 //! // For TwinCAT devices, a route must be set to allow the client to connect.
 //! // The source AMS address is automatically generated from the local IP,
 //! // but can be explicitly specified as the third argument.
-//! let client = ads::Client::new(("plc", ads::PORT), ads::Timeouts::none(), None)?;
+//! let client = ads::Client::new(("plchost", ads::PORT), ads::Timeouts::none(),
+//!                               ads::Source::Auto)?;
 //!
 //! // Specify the target ADS device to talk to, by NetID and AMS port.
 //! // Port 851 usually refers to the first PLC instance.
