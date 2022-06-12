@@ -602,7 +602,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for (name, ty) in &type_map {
                         if name.to_lowercase().contains(&filter) {
-                            println!("{:40} ({:6x})", name, ty.size);
+                            println!("**          ({:6x}) {:40}", ty.size, name);
                             print_fields(&type_map, 0, &name, 1);
                         }
                     }
