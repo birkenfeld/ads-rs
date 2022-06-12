@@ -13,7 +13,7 @@ Use with Cargo as usual, no system dependencies are required.
 
 ```toml
 [dependencies]
-ads = "0.3"
+ads = "0.4"
 ```
 
 ### Rust version
