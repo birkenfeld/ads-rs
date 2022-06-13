@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 -- Jun 2022 (unreleased)
+## 0.4.0 -- Jun 2022
 
 - Support asking the AMS router for an open port.  This is required when
   connecting to a PLC on 127.0.0.1.
