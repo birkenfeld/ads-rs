@@ -46,13 +46,11 @@ struct Args {
 
 #[derive(StructOpt, Debug)]
 enum Cmd {
-    Addroute(AddRouteArgs),
     /// Query basic information about the system over UDP.
     Info,
     /// Query extended information about the system over ADS.
     TargetDesc,
-    /// Query and display the list of ADS routes on the system.
-    RouteList,
+    Route(RouteAction),
     File(FileAction),
     License(LicenseAction),
     State(StateArgs),
@@ -62,7 +60,15 @@ enum Cmd {
 }
 
 #[derive(StructOpt, Debug)]
-/// Add an ADS route to the remote TwinCAT system.
+/// Manipulate ADS routes.
+enum RouteAction {
+    /// Add an ADS route to the remote TwinCAT system.
+    Add(AddRouteArgs),
+    /// Query and display the list of ADS routes on the system.
+    List,
+}
+
+#[derive(StructOpt, Debug)]
 struct AddRouteArgs {
     /// hostname or IP address of the route's destionation
     addr: String,
@@ -354,12 +360,40 @@ fn connect(target: Target, autoroute: bool, defport: ads::AmsPort) -> ads::Resul
 fn main_inner(args: Args) -> Result<(), Error> {
     let udp_addr = (args.target.host.as_str(), args.target.port.unwrap_or(ads::UDP_PORT));
     match args.cmd {
-        Cmd::Addroute(subargs) => {
+        Cmd::Route(RouteAction::Add(subargs)) => {
             ads::udp::add_route(udp_addr, subargs.netid, &subargs.addr,
                                 subargs.routename.as_deref(),
                                 Some(&subargs.username), Some(&subargs.password),
                                 subargs.temporary)?;
             println!("Success.");
+        }
+        Cmd::Route(RouteAction::List) => {
+            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let dev = client.device(amsaddr);
+            let mut routeinfo = [0; 2048];
+            println!("{:-20} {:-22} {:-18} Flags", "Name", "NetID", "Host/IP");
+            for subindex in 0.. {
+                match dev.read(ads::index::ROUTE_LIST, subindex, &mut routeinfo) {
+                    Err(ads::Error::Ads(_, _, 0x716)) => break,
+                    Err(other) => return Err(Error::Lib(other)),
+                    Ok(n) if n >= 48 => {
+                        let netid = ads::AmsNetId::from_slice(&routeinfo[..6]).unwrap();
+                        let flags = LE::read_u32(&routeinfo[8..]);
+                        let _timeout = LE::read_u32(&routeinfo[12..]);
+                        let _max_frag = LE::read_u32(&routeinfo[16..]);
+                        let hostlen = LE::read_u32(&routeinfo[32..]) as usize;
+                        let namelen = LE::read_u32(&routeinfo[36..]) as usize;
+                        let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen-1]);
+                        let name = String::from_utf8_lossy(&routeinfo[44+hostlen..][..namelen-1]);
+                        print!("{:-20} {:-22} {:-18}", name, netid.to_string(), host);
+                        if flags & 0x01 != 0 { print!(" temporary"); }
+                        if flags & 0x80 != 0 { print!(" unidirectional"); }
+                        if flags & 0x100 != 0 { print!(" virtual/nat"); }
+                        println!();
+                    }
+                    _ => println!("Route entry {} too short", subindex),
+                }
+            }
         }
         Cmd::Info => {
             let info = ads::udp::get_info(udp_addr)?;
@@ -402,34 +436,6 @@ fn main_inner(args: Args) -> Result<(), Error> {
             println!("Platform: {}", String::from_utf8_lossy(&xml[..n-1]));
             let n = dev.read(ads::index::TARGET_DESC, 7, &mut xml)?;
             println!("Project name: {}", String::from_utf8_lossy(&xml[..n-1]));
-        }
-        Cmd::RouteList => {
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
-            let dev = client.device(amsaddr);
-            let mut routeinfo = [0; 2048];
-            println!("{:-20} {:-22} {:-18} Flags", "Name", "NetID", "Host/IP");
-            for subindex in 0.. {
-                match dev.read(ads::index::ROUTE_LIST, subindex, &mut routeinfo) {
-                    Err(ads::Error::Ads(_, _, 0x716)) => break,
-                    Err(other) => return Err(Error::Lib(other)),
-                    Ok(n) if n >= 48 => {
-                        let netid = ads::AmsNetId::from_slice(&routeinfo[..6]).unwrap();
-                        let flags = LE::read_u32(&routeinfo[8..]);
-                        let _timeout = LE::read_u32(&routeinfo[12..]);
-                        let _max_frag = LE::read_u32(&routeinfo[16..]);
-                        let hostlen = LE::read_u32(&routeinfo[32..]) as usize;
-                        let namelen = LE::read_u32(&routeinfo[36..]) as usize;
-                        let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen-1]);
-                        let name = String::from_utf8_lossy(&routeinfo[44+hostlen..][..namelen-1]);
-                        print!("{:-20} {:-22} {:-18}", name, netid.to_string(), host);
-                        if flags & 0x01 != 0 { print!(" temporary"); }
-                        if flags & 0x80 != 0 { print!(" unidirectional"); }
-                        if flags & 0x100 != 0 { print!(" virtual/nat"); }
-                        println!();
-                    }
-                    _ => println!("Route entry {} too short", subindex),
-                }
-            }
         }
         Cmd::File(subargs) => {
             use ads::file;
