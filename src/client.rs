@@ -1237,6 +1237,9 @@ fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
     // Go through the buffers in reverse order.
     for i in (0..requests.len()).rev() {
         let (my_initial, my_actual, _, mut size) = offsets[i];
+        if size == 0 {
+            continue;
+        };
         if my_initial == my_actual {
             // Offsets match, no further action required since all
             // previous buffers must be of full length too.
