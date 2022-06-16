@@ -221,7 +221,7 @@ impl Client {
                 let mut reply = [0; 14];
                 socket.write_all(&request_port_msg).ctx("requesting port from router")?;
                 socket.read_exact(&mut reply).ctx("requesting port from router")?;
-                if &reply[..6] != &[0, 16, 8, 0, 0, 0] {
+                if reply[..6] != [0, 16, 8, 0, 0, 0] {
                     return Err(Error::Reply("requesting port", "unexpected reply header", 0));
                 }
                 source_port_opened = true;
