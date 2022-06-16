@@ -578,7 +578,8 @@ impl<'c> Device<'c> {
     ///
     /// Note: to be independent of the host's byte order, use the integer types
     /// defined in `zerocopy::byteorder`.
-    pub fn read_value<T: Default + AsBytes + FromBytes>(&self, index_group: u32, index_offset: u32) -> Result<T> {
+    pub fn read_value<T: Default + AsBytes + FromBytes>(&self, index_group: u32,
+                                                        index_offset: u32) -> Result<T> {
         let mut buf = T::default();
         self.read_exact(index_group, index_offset, buf.as_bytes_mut())?;
         Ok(buf)
@@ -593,7 +594,23 @@ impl<'c> Device<'c> {
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single read can have returned its
     /// own error.  The [`ReadRequest::data`] method will return either the
-    /// returned data or the error for each read.
+    /// properly truncated returned data or the error for each read.
+    ///
+    /// Example:
+    /// ```ignore
+    /// // create buffers
+    /// let mut buf_1 = [0; 128];  // request reading 128 bytes
+    /// let mut buf_2 = [0; 128];  // from two indices
+    /// // create the request structures
+    /// let mut req_1 = ReadRequest::new(ix1, off1, &mut buf_1);
+    /// let mut req_2 = ReadRequest::new(ix2, off2, &mut buf_2);
+    /// //  actual request
+    /// device.read_multi(&mut [req_1, req_2])?;
+    /// // extract the resulting data, checking individual reads for
+    /// // errors and getting the returned data otherwise
+    /// let res_1 = req_1.data()?;
+    /// let res_2 = req_2.data()?;
+    /// ```
     pub fn read_multi(&self, requests: &mut [ReadRequest]) -> Result<()> {
         let nreq = requests.len();
         let rlen = requests.iter().map(|r| size_of::<ResultLength>() + r.rbuf.len()).sum::<usize>();
@@ -635,7 +652,8 @@ impl<'c> Device<'c> {
     /// Write data of given type.
     ///
     /// See `read_value` for details.
-    pub fn write_value<T: AsBytes>(&self, index_group: u32, index_offset: u32, value: &T) -> Result<()> {
+    pub fn write_value<T: AsBytes>(&self, index_group: u32, index_offset: u32,
+                                   value: &T) -> Result<()> {
         self.write(index_group, index_offset, value.as_bytes())
     }
 
@@ -703,7 +721,8 @@ impl<'c> Device<'c> {
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single write/read can have
     /// returned its own error.  The [`WriteReadRequest::data`] method will
-    /// return either the returned data or the error for each write/read.
+    /// return either the properly truncated returned data or the error for each
+    /// write/read.
     pub fn write_read_multi(&self, requests: &mut [WriteReadRequest]) -> Result<()> {
         let nreq = requests.len();
         let rlen = requests.iter().map(|r| size_of::<ResultLength>() + r.rbuf.len()).sum::<usize>();
