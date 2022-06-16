@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 -- unreleased
+
+- Add `Handle::raw` to get the u32 handle ID.
+
 ## 0.4.0 -- Jun 2022
 
 - Support asking the AMS router for an open port.  This is required when

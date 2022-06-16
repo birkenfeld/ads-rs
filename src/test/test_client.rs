@@ -158,6 +158,8 @@ fn test_symbolaccess() {
         assert!(handle.write(&[1, 2, 3, 4, 5]).is_err());
         assert!(handle.read(&mut [0; 5]).is_err());
 
+        assert!(handle.raw() == 77);
+
         handle.write(&[4, 3, 2, 1]).unwrap();
         let mut buf = [0; 4];
         handle.read(&mut buf).unwrap();
