@@ -249,7 +249,7 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
         let name = String::from_utf8_lossy(&buf[..len_name]).into_owned();
         ptr.read_exact(&mut buf[..len_type + 1]).ctx(ctx)?;
         let typ = String::from_utf8_lossy(&buf[..len_type]).into_owned();
-        ptr.read_exact(&mut buf[..len_comment + 1]).ctx(ctx)?;
+        ptr = &ptr[len_comment + 1..];
 
         let mut array = vec![];
         for _ in 0..array_dim {
