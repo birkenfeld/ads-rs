@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.4.1 -- unreleased
+## 0.4.2 -- Sep 2022
+
+- Fix a problem with long comments in symbol info (#8).
+
+## 0.4.1 -- Aug 2022
 
 - Add `Handle::raw` to get the u32 handle ID.
 
