@@ -65,9 +65,9 @@ impl Command {
 
 /// Size of the AMS/TCP + AMS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
-const TCP_HEADER_SIZE: usize = 6;
-const AMS_HEADER_SIZE: usize = 38;  // including AMS/TCP header
-const DEFAULT_BUFFER_SIZE: usize = 100;
+pub(crate) const TCP_HEADER_SIZE: usize = 6;
+pub(crate) const AMS_HEADER_SIZE: usize = 38;  // including AMS/TCP header
+pub(crate) const DEFAULT_BUFFER_SIZE: usize = 100;
 
 /// Holds the different timeouts that will be used by the Client.
 /// None means no timeout in every case.
