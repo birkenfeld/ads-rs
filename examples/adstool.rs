@@ -717,7 +717,7 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
             return;
         }
         VarType::Lreal => {
-            let v = i64::from_le_bytes(buf[..8].try_into().expect("size"));
+            let v = f64::from_le_bytes(buf[..8].try_into().expect("size"));
             println!("{}", v);
             return;
         }
