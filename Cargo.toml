@@ -12,7 +12,7 @@ keywords = ["Beckhoff", "ADS", "automation", "device", "PLC"]
 byteorder = "1.4.3"
 crossbeam-channel = "0.5.1"
 itertools = "0.10.1"
-thiserror = "1.0.30"
+thiserror = "=1.0.39"
 zerocopy = "0.3.0"
 
 [dev-dependencies]
