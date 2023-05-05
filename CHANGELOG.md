@@ -2,7 +2,8 @@
 
 ## 0.5.0 -- unreleased
 
-- Array bounds can be negative, change type in symbol info (#13)
+- Rust 1.58 is now required.
+- Array bounds can be negative, change type in symbol info (#13).
 
 ## 0.4.2 -- Sep 2022
 

@@ -214,9 +214,7 @@ impl Server {
         if data.len() != size_of::<IndexLength>() {
             return (vec![], 0x706);
         }
-        // TODO: when using zerocopy > 0.3, replace by `read_from`.
-        let mut request = IndexLength::default();
-        request.as_bytes_mut().copy_from_slice(data);
+        let request = IndexLength::read_from(data).unwrap();
         let grp = request.index_group.get();
         let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
@@ -243,8 +241,7 @@ impl Server {
         if data.len() < size_of::<IndexLength>() {
             return (vec![], 0x706);
         }
-        let mut request = IndexLength::default();
-        request.as_bytes_mut().copy_from_slice(&data[..12]);
+        let request = IndexLength::read_from(&data[..12]).unwrap();
         let grp = request.index_group.get();
         let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
@@ -276,8 +273,7 @@ impl Server {
         if data.len() < size_of::<IndexLengthRW>() {
             return (vec![], 0x706);
         }
-        let mut request = IndexLengthRW::default();
-        request.as_bytes_mut().copy_from_slice(&data[..16]);
+        let request = IndexLengthRW::read_from(&data[..16]).unwrap();
         let off = request.index_offset.get();
         let rlen = request.read_length.get() as usize;
         let wlen = request.write_length.get() as usize;
@@ -420,8 +416,7 @@ impl Server {
         if data.len() != size_of::<AddNotif>() {
             return (vec![], 0x706);
         }
-        let mut request = AddNotif::default();
-        request.as_bytes_mut().copy_from_slice(data);
+        let request = AddNotif::read_from(data).unwrap();
         let off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
 
