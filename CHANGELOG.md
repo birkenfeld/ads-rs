@@ -3,6 +3,8 @@
 ## 0.5.0 -- unreleased
 
 - Rust 1.58 is now required.
+- Fixed-length string types in `ads::strings` are now using const generics
+  instead of macro-created types.
 - Array bounds can be negative, change type in symbol info (#13).
 
 ## 0.4.2 -- Sep 2022

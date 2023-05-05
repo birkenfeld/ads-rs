@@ -247,7 +247,7 @@ fn test_bad_notification() {
 
 #[test]
 fn test_string_type() {
-    crate::make_string_type!(String5, 5);
+    type String5 = crate::strings::String<5>;
 
     run_test(ServerOpts::default(), |device| {
         let mut bstr = String5::try_from("abc").unwrap();
@@ -276,7 +276,7 @@ fn test_string_type() {
 
 #[test]
 fn test_wstring_type() {
-    crate::make_wstring_type!(WString5, 5);
+    type WString5 = crate::strings::WString<5>;
 
     run_test(ServerOpts::default(), |device| {
         let mut wstr = WString5::try_from("abc").unwrap();
