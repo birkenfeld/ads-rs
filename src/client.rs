@@ -354,7 +354,6 @@ impl Client {
         }
         // Read the other fields we need.
         assert!(reply.len() >= AMS_HEADER_SIZE);
-        // TODO: use AdsHeader::read_from with zerocopy 0.6
         let mut ptr = &reply[22..];
         let ret_cmd = ptr.read_u16::<LE>().expect("size");
         let state_flags = ptr.read_u16::<LE>().expect("size");
@@ -528,7 +527,7 @@ pub struct Device<'c> {
 impl<'c> Device<'c> {
     /// Read the device's name + version.
     pub fn get_info(&self) -> Result<DeviceInfo> {
-        let mut data = DeviceInfoRaw::default();
+        let mut data = DeviceInfoRaw::new_zeroed();
         self.client.communicate(Command::DevInfo, self.addr,
                                 &[], &mut [data.as_bytes_mut()])?;
 
@@ -753,7 +752,7 @@ impl<'c> Device<'c> {
 
     /// Return the ADS and device state of the device.
     pub fn get_state(&self) -> Result<(AdsState, u16)> {
-        let mut state = ReadState::default();
+        let mut state = ReadState::new_zeroed();
         self.client.communicate(Command::ReadState, self.addr,
                                 &[], &mut [state.as_bytes_mut()])?;
 
@@ -980,9 +979,7 @@ impl FromStr for AdsState {
 // Structures used in communication, not exposed to user,
 // but pub(crate) for the test suite.
 
-// TODO: with zerocopy 0.6+, use new_zeroed instead of deriving Default
-
-#[derive(AsBytes, FromBytes, Debug, Default)]
+#[derive(AsBytes, FromBytes, Debug)]
 #[repr(C)]
 pub(crate) struct AdsHeader {
     /// 0x0 - ADS command
@@ -1012,7 +1009,7 @@ pub(crate) struct AdsHeader {
     pub invoke_id:   U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct DeviceInfoRaw {
     pub major:   u8,
@@ -1021,7 +1018,7 @@ pub(crate) struct DeviceInfoRaw {
     pub name:    [u8; 16],
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct IndexLength {
     pub index_group:  U32<LE>,
@@ -1029,14 +1026,14 @@ pub(crate) struct IndexLength {
     pub length:       U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct ResultLength {
     pub result:       U32<LE>,
     pub length:       U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct IndexLengthRW {
     pub index_group:  U32<LE>,
@@ -1045,14 +1042,14 @@ pub(crate) struct IndexLengthRW {
     pub write_length: U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct ReadState {
     pub ads_state:   U16<LE>,
     pub dev_state:   U16<LE>,
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct WriteControl {
     pub ads_state:   U16<LE>,
@@ -1060,7 +1057,7 @@ pub(crate) struct WriteControl {
     pub data_length: U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, AsBytes)]
 #[repr(C)]
 pub(crate) struct AddNotif {
     pub index_group:  U32<LE>,
@@ -1088,7 +1085,7 @@ impl<'buf> ReadRequest<'buf> {
                 index_offset: U32::new(index_offset),
                 length:       U32::new(buffer.len() as u32),
             },
-            res: ResultLength::default(),
+            res: ResultLength::new_zeroed(),
             rbuf: buffer
         }
     }
@@ -1158,7 +1155,7 @@ impl<'buf> WriteReadRequest<'buf> {
                 read_length:  U32::new(read_buffer.len() as u32),
                 write_length: U32::new(write_buffer.len() as u32),
             },
-            res:  ResultLength::default(),
+            res:  ResultLength::new_zeroed(),
             wbuf: write_buffer,
             rbuf: read_buffer,
         }
@@ -1196,7 +1193,7 @@ impl AddNotifRequest {
                 cycle_time:   U32::new(attributes.cycle_time.as_millis() as u32),
                 reserved:     [0; 16],
             },
-            res: ResultLength::default(),
+            res: ResultLength::new_zeroed(),
         }
     }
 

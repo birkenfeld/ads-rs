@@ -76,7 +76,6 @@ impl Message {
     }
 
     fn parse_internal(data: &[u8], exp_service: u32) -> Result<Self> {
-        // TODO: use read_from with zerocopy 0.6
         let mut data_ptr = data;
         let magic = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
         let invoke_id = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
