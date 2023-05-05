@@ -140,7 +140,7 @@ pub struct Type {
     /// Total size of the type, in bytes.
     pub size:      usize,
     /// If the type is an array, (lower, upper) index bounds for all dimensions.
-    pub array:     Vec<(u32, u32)>,
+    pub array:     Vec<(i32, i32)>,
     /// If the type is a struct, all fields it contains.
     pub fields:    Vec<Field>,
     /// Base type (see [`Symbol::base_type`]).
@@ -184,7 +184,7 @@ pub struct Field {
     /// Size of the field, in bytes.
     pub size:      usize,
     /// If the field is an array, (lower, upper) index bounds for all dimensions.
-    pub array:     Vec<(u32, u32)>,
+    pub array:     Vec<(i32, i32)>,
     /// Base type (see [`Symbol::base_type`]).
     pub base_type: u32,
     /// Type flags (see [`Type::flags`]).
@@ -253,8 +253,8 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
 
         let mut array = vec![];
         for _ in 0..array_dim {
-            let lower = ptr.read_u32::<LE>().ctx(ctx)?;
-            let total = ptr.read_u32::<LE>().ctx(ctx)?;
+            let lower = ptr.read_i32::<LE>().ctx(ctx)?;
+            let total = ptr.read_i32::<LE>().ctx(ctx)?;
             array.push((lower, lower + total - 1));
         }
 

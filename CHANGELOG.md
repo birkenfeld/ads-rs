@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0 -- unreleased
+
+- Array bounds can be negative, change type in symbol info (#13)
+
 ## 0.4.2 -- Sep 2022
 
 - Fix a problem with long comments in symbol info (#8).
