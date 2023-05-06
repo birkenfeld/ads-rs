@@ -138,6 +138,10 @@ enum LicenseAction {
 /// Read or write the ADS state of the device.
 struct StateArgs {
     /// if given, the target state
+    ///
+    /// Note that state transitions are not always straightforward;
+    /// for example, you need to set `Reset` to go from `Config` to `Run`,
+    /// and `Reconfig` to go from `Run` to `Config`.
     target_state: Option<ads::AdsState>,
 }
 
