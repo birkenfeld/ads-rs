@@ -84,7 +84,7 @@ impl Server {
         let opts = self.opts.clone();
         loop {
             let opts = opts.lock().unwrap();
-            let mut header = AdsHeader::default();
+            let mut header = AdsHeader::new_zeroed();
             if let Err(e) = socket.read_exact(header.as_bytes_mut()) {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     // connection was closed
@@ -117,7 +117,7 @@ impl Server {
                 self.send_notification(*off, *len, &header, opts.bad_notif, &mut socket);
             }
 
-            let mut reply_header = AdsHeader::default();
+            let mut reply_header = AdsHeader::new_zeroed();
             if opts.garbage_header {
                 reply_header.ams_cmd = 234;
             }
@@ -152,7 +152,7 @@ impl Server {
         notif_header.handle.set(132);
         notif_header.size.set(len as u32);
 
-        let mut ads_header = AdsHeader::default();
+        let mut ads_header = AdsHeader::new_zeroed();
         ads_header.length.set(32 + data_len as u32);
         ads_header.dest_netid = header.src_netid;
         ads_header.dest_port = header.src_port;
