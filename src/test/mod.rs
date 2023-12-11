@@ -12,7 +12,7 @@ use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
 use zerocopy::{
     byteorder::{U32, U64},
-    AsBytes, FromBytes,
+    AsBytes, FromBytes, FromZeroes
 };
 
 use crate::client::{AddNotif, AdsHeader, IndexLength, IndexLengthRW};
@@ -448,7 +448,7 @@ impl Server {
     }
 }
 
-#[derive(AsBytes, FromBytes, Debug, Default)]
+#[derive(AsBytes, FromBytes, FromZeroes, Debug, Default)]
 #[repr(C)]
 struct SingleNotification {
     len:     U32<LE>,
