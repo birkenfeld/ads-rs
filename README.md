@@ -18,7 +18,7 @@ ads = "0.4"
 
 ### Rust version
 
-Minimum supported Rust version is 1.58.1.
+Minimum supported Rust version is 1.63.0.
 
 ## Usage
 

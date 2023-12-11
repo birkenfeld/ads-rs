@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 /// Represents an AMS NetID.
 ///
@@ -19,7 +19,8 @@ use zerocopy::{AsBytes, FromBytes};
 /// Although often the first 4 bytes of a NetID look like an IP address, and
 /// sometimes even are identical to the device's IP address, there is no
 /// requirement for this, and one should never rely on it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug, AsBytes, FromBytes)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug,
+         AsBytes, FromZeroes, FromBytes)]
 #[repr(C)]
 pub struct AmsNetId(pub [u8; 6]);
 

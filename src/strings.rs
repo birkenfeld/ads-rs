@@ -24,6 +24,11 @@ impl<const LEN: usize> String<LEN> {
         self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len())
     }
 
+    /// Returns true if the string is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Get the slice up to the first null byte.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0[..self.len()]
@@ -123,10 +128,13 @@ unsafe impl<const LEN: usize> zerocopy::AsBytes for String<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 
-unsafe impl<const LEN: usize> zerocopy::FromBytes for String<LEN> {
+unsafe impl<const LEN: usize> zerocopy::FromZeroes for String<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 
+unsafe impl<const LEN: usize> zerocopy::FromBytes for String<LEN> {
+    fn only_derive_is_allowed_to_implement_this_trait() { }
+}
 
 /// Represents a fixed-length wide string.
 ///
@@ -152,6 +160,11 @@ impl<const LEN: usize> WString<LEN> {
     /// Return the number of code units up to the first null.
     pub fn len(&self) -> usize {
         self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len())
+    }
+
+    /// Returns true if the string is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Get the slice up to the first null code unit.
@@ -262,10 +275,13 @@ unsafe impl<const LEN: usize> zerocopy::AsBytes for WString<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 
-unsafe impl<const LEN: usize> zerocopy::FromBytes for WString<LEN> {
+unsafe impl<const LEN: usize> zerocopy::FromZeroes for WString<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 
+unsafe impl<const LEN: usize> zerocopy::FromBytes for WString<LEN> {
+    fn only_derive_is_allowed_to_implement_this_trait() { }
+}
 
 // compatibility aliases
 
