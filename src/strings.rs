@@ -1,5 +1,7 @@
 //! Const-generic string types for representing fixed-length strings.
 
+use zerocopy::{FromBytes, FromZeroes};
+
 /// Represents a fixed-length byte string.
 ///
 /// This type can be created from a `&str` or `&[u8]` if their byte
@@ -10,7 +12,7 @@
 ///
 /// It can be converted to a Rust `String` if it is UTF8 encoded.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, FromBytes, FromZeroes)]
 pub struct String<const LEN: usize>([u8; LEN], u8);  // one extra NULL byte
 
 impl<const LEN: usize> String<LEN> {
@@ -128,14 +130,6 @@ unsafe impl<const LEN: usize> zerocopy::AsBytes for String<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 
-unsafe impl<const LEN: usize> zerocopy::FromZeroes for String<LEN> {
-    fn only_derive_is_allowed_to_implement_this_trait() { }
-}
-
-unsafe impl<const LEN: usize> zerocopy::FromBytes for String<LEN> {
-    fn only_derive_is_allowed_to_implement_this_trait() { }
-}
-
 /// Represents a fixed-length wide string.
 ///
 /// This type can be created from a `&[u16]` if its length does not
@@ -148,7 +142,7 @@ unsafe impl<const LEN: usize> zerocopy::FromBytes for String<LEN> {
 /// It can be converted to a Rust `String` if it is properly UTF16
 /// encoded.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, FromBytes, FromZeroes)]
 pub struct WString<const LEN: usize>([u16; LEN], u16);  // one extra NULL byte
 
 impl<const LEN: usize> WString<LEN> {
@@ -272,14 +266,6 @@ impl<const LEN: usize> std::convert::TryFrom<WString<LEN>> for std::string::Stri
 // zerocopy implementations
 
 unsafe impl<const LEN: usize> zerocopy::AsBytes for WString<LEN> {
-    fn only_derive_is_allowed_to_implement_this_trait() { }
-}
-
-unsafe impl<const LEN: usize> zerocopy::FromZeroes for WString<LEN> {
-    fn only_derive_is_allowed_to_implement_this_trait() { }
-}
-
-unsafe impl<const LEN: usize> zerocopy::FromBytes for WString<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 
