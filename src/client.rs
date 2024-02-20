@@ -18,7 +18,7 @@ use crate::notif;
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
 use zerocopy::byteorder::{U16, U32};
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -979,7 +979,7 @@ impl FromStr for AdsState {
 // Structures used in communication, not exposed to user,
 // but pub(crate) for the test suite.
 
-#[derive(AsBytes, FromBytes, Debug)]
+#[derive(AsBytes, FromBytes, FromZeroes, Debug)]
 #[repr(C)]
 pub(crate) struct AdsHeader {
     /// 0x0 - ADS command
@@ -1009,7 +1009,7 @@ pub(crate) struct AdsHeader {
     pub invoke_id:   U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct DeviceInfoRaw {
     pub major:   u8,
@@ -1018,7 +1018,7 @@ pub(crate) struct DeviceInfoRaw {
     pub name:    [u8; 16],
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct IndexLength {
     pub index_group:  U32<LE>,
@@ -1026,14 +1026,14 @@ pub(crate) struct IndexLength {
     pub length:       U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct ResultLength {
     pub result:       U32<LE>,
     pub length:       U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct IndexLengthRW {
     pub index_group:  U32<LE>,
@@ -1042,14 +1042,14 @@ pub(crate) struct IndexLengthRW {
     pub write_length: U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct ReadState {
     pub ads_state:   U16<LE>,
     pub dev_state:   U16<LE>,
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct WriteControl {
     pub ads_state:   U16<LE>,
@@ -1057,7 +1057,7 @@ pub(crate) struct WriteControl {
     pub data_length: U32<LE>,
 }
 
-#[derive(FromBytes, AsBytes)]
+#[derive(FromBytes, FromZeroes, AsBytes)]
 #[repr(C)]
 pub(crate) struct AddNotif {
     pub index_group:  U32<LE>,

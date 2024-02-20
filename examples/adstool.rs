@@ -10,6 +10,7 @@ use parse_int::parse;
 use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
 use strum::EnumString;
 use quick_xml::events::Event;
+use quick_xml::name::QName;
 use time::OffsetDateTime;
 
 #[derive(StructOpt, Debug)]
@@ -419,16 +420,15 @@ fn main_inner(args: Args) -> Result<(), Error> {
             dev.read(ads::index::TARGET_DESC, 1, &mut xml)?;
             let mut rdr = quick_xml::Reader::from_reader(&xml[..]);
             rdr.trim_text(true);
-            let mut buf = Vec::new();
             let mut stack = Vec::new();
             loop {
-                match rdr.read_event(&mut buf) {
-                    Ok(Event::Start(el)) => if el.name() != b"TcTargetDesc" {
-                        stack.push(String::from_utf8_lossy(el.name()).to_string());
+                match rdr.read_event() {
+                    Ok(Event::Start(el)) => if el.name() != QName(b"TcTargetDesc") {
+                        stack.push(String::from_utf8_lossy(el.name().0).to_string());
                     }
                     Ok(Event::End(_)) => { let _ = stack.pop(); }
                     Ok(Event::Text(t)) => if !stack.is_empty() {
-                        println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(t.escaped()));
+                        println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(&t));
                     }
                     Ok(Event::Eof) => break,
                     Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),

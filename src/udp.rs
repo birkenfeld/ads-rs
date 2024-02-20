@@ -7,7 +7,7 @@ use std::{char, iter, str};
 
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use zerocopy::byteorder::{U16, U32};
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 use crate::errors::ErrContext;
 use crate::{AmsAddr, AmsNetId, Error, Result};
@@ -295,7 +295,7 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
     })
 }
 
-#[derive(FromBytes, AsBytes, Default)]
+#[derive(FromBytes, FromZeroes, AsBytes, Default)]
 #[repr(C)]
 pub(crate) struct UdpHeader {
     magic:     U32<LE>,
