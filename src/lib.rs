@@ -36,18 +36,18 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
-pub mod netid;
 pub mod client;
-pub mod notif;
-pub mod udp;
 pub mod errors;
-pub mod ports;
-pub mod index;
 pub mod file;
+pub mod index;
+pub mod netid;
+pub mod notif;
+pub mod ports;
 pub mod strings;
 pub mod symbol;
 #[cfg(test)]
 mod test;
+pub mod udp;
 
 pub use client::{AdsState, Client, Device, Source, Timeouts};
 pub use errors::{Error, Result};
