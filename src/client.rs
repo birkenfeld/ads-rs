@@ -2,16 +2,16 @@
 
 use std::collections::BTreeSet;
 use std::convert::{TryFrom, TryInto};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use byteorder::{ByteOrder, ReadBytesExt, LE};
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TryRecvError};
 use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
@@ -408,20 +408,18 @@ impl Client {
         // &T impls Write for T: Write, so no &mut self required.
         (&self.socket).write_all(&request).ctx("sending request")?;
 
-        //TODO: Support read timeout again.
         // Get a reply from the reader thread, with timeout or not.
-        let reply = //if let Some(tmo) = self.read_timeout {
-        //     self.reply_recv
-        //         .recv_timeout(tmo)
-        //         .map_err(|_| io::ErrorKind::TimedOut.into())
-        //         .ctx("receiving reply (route set?)")?
-        // } else {
+        let reply = if let Some(tmo) = self.read_timeout {
+            recv_filtered_timeout(
+                &self.reply_recv,
+                |p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id),
+                tmo,
+            )
+        } else {
             self.reply_recv
                 .iter()
-                .find(|p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id));
-        // .map_err(|_| io::ErrorKind::UnexpectedEof.into())
-        // .ctx("receiving reply (route set?)")?
-        // }?;
+                .find(|p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id))
+        };
 
         if reply.is_none() {
             return Err(Error::Reply(cmd.action(), "no response", 0));
@@ -430,10 +428,9 @@ impl Client {
         let reply = reply.unwrap();
 
         if reply.is_err() {
-            //let err_msg = format!("Erroneous response: {}", reply.err().unwrap());
-            //TODO: Improve error reporting.
-            return Err(Error::Reply(cmd.action(), "Erroneous response", 0));
+            return Err(reply.err().unwrap());
         }
+
         let reply = reply.unwrap();
 
         // Validate the incoming reply.  The reader thread already made sure that
@@ -443,19 +440,6 @@ impl Client {
         if reply.raw[14..22] != request[6..14] {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
-        // Read the other fields we need.
-        // assert!(reply.len() >= AMS_HEADER_SIZE);
-        // let mut ptr = &reply[22..];
-        // let ret_cmd = ptr.read_u16::<LE>().expect("size");
-        // let state_flags = ptr.read_u16::<LE>().expect("size");
-        // let data_len = ptr.read_u32::<LE>().expect("size");
-        // let error_code = ptr.read_u32::<LE>().expect("size");
-        // let response_id = ptr.read_u32::<LE>().expect("size");
-        // let result = if reply.len() >= AMS_HEADER_SIZE + 4 {
-        //     ptr.read_u32::<LE>().expect("size")
-        // } else {
-        //     0 // this must be because an error code is already set
-        // };
 
         // Command must match.
         if reply.ret_cmd != cmd as u16 {
@@ -473,14 +457,7 @@ impl Client {
                 reply.state_flags.into(),
             ));
         }
-        // Invoke ID must match what we sent.
-        // if response_id != invoke_id {
-        //     return Err(Error::Reply(
-        //         cmd.action(),
-        //         "unexpected invoke ID",
-        //         response_id,
-        //     ));
-        // }
+
         // Check error code in AMS header.
         if reply.error_code != 0 {
             return ads_error(cmd.action(), reply.error_code);
@@ -1544,4 +1521,48 @@ fn test_fixup_buffers() {
     assert!(&reqs[3].rbuf[..4] == b"abcd");
     assert!(&reqs[1].rbuf[..6] == b"ABCDEF");
     assert!(&reqs[0].rbuf[..8] == b"12345678");
+}
+
+fn recv_filtered_timeout<T, F>(receiver: &Receiver<T>, filter: F, timeout: Duration) -> Option<T>
+where
+    F: Fn(&T) -> bool,
+{
+    let start = Instant::now();
+    let condvar = Condvar::new();
+    let mutex = Mutex::new(());
+
+    loop {
+        // Check if the timeout has elapsed
+        if start.elapsed() >= timeout {
+            return None;
+        }
+
+        // Try to receive a message from the channel
+        match receiver.try_recv() {
+            Ok(msg) => {
+                // Check if the message matches the filter
+                if filter(&msg) {
+                    return Some(msg);
+                } else {
+                    // Sleep for a short duration to avoid busy waiting
+                    let guard = mutex.lock().unwrap();
+                    let remaining = timeout
+                        .checked_sub(start.elapsed())
+                        .unwrap_or_else(|| Duration::from_millis(0));
+                    let _ = condvar.wait_timeout(guard, remaining).unwrap();
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                // Sleep for a short duration to avoid busy waiting
+                let guard = mutex.lock().unwrap();
+                let remaining = timeout
+                    .checked_sub(start.elapsed())
+                    .unwrap_or_else(|| Duration::from_millis(0));
+                let _ = condvar.wait_timeout(guard, remaining).unwrap();
+            }
+            Err(TryRecvError::Disconnected) => {
+                return None;
+            }
+        }
+    }
 }
