@@ -114,6 +114,46 @@ pub enum Source {
     Request,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AdsResponse {
+    ret_cmd: u16,
+    state_flags: u16,
+    data_len: u32,
+    error_code: u32,
+    invoke_id: u32,
+    result: u32,
+    data: Option<Vec<u8>>,
+    raw: Vec<u8>,
+}
+
+impl AdsResponse {
+    /// Creates a Message from recieved bytes
+    pub fn from_bytes(reply: &Vec<u8>) -> Self {
+        let mut ptr = &reply[22..];
+        //let mut message =
+        AdsResponse {
+            ret_cmd: ptr.read_u16::<LE>().expect("size"),
+            state_flags: ptr.read_u16::<LE>().expect("size"),
+            data_len: ptr.read_u32::<LE>().expect("size"),
+            error_code: ptr.read_u32::<LE>().expect("size"),
+            invoke_id: ptr.read_u32::<LE>().expect("size"),
+            result: if reply.len() >= AMS_HEADER_SIZE + 4 {
+                ptr.read_u32::<LE>().expect("size")
+            } else {
+                0 // this must be because an error code is already set
+            },
+            data: Some(reply[AMS_HEADER_SIZE + 4..].to_vec()),
+            raw: reply.clone(),
+        } //;
+
+        // if message.data_len > 0 {
+        //     message.data = Some(reply[AMS_HEADER_SIZE + 4..].to_vec());
+        // }
+
+        //message
+    }
+}
+
 /// Represents a connection to a ADS server.
 ///
 /// The Client's communication methods use `&self`, so that it can be freely
@@ -132,7 +172,8 @@ pub struct Client {
     /// Sender for used Vec buffers to the reader thread
     buf_send: Sender<Vec<u8>>,
     /// Receiver for synchronous replies: used in `communicate`
-    reply_recv: Receiver<Result<Vec<u8>>>,
+    reply_recv: Receiver<Result<AdsResponse>>,
+
     /// Receiver for notifications: cloned and given out to interested parties
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
@@ -367,91 +408,106 @@ impl Client {
         // &T impls Write for T: Write, so no &mut self required.
         (&self.socket).write_all(&request).ctx("sending request")?;
 
+        //TODO: Support read timeout again.
         // Get a reply from the reader thread, with timeout or not.
-        let reply = if let Some(tmo) = self.read_timeout {
+        let reply = //if let Some(tmo) = self.read_timeout {
+        //     self.reply_recv
+        //         .recv_timeout(tmo)
+        //         .map_err(|_| io::ErrorKind::TimedOut.into())
+        //         .ctx("receiving reply (route set?)")?
+        // } else {
             self.reply_recv
-                .recv_timeout(tmo)
-                .map_err(|_| io::ErrorKind::TimedOut.into())
-                .ctx("receiving reply (route set?)")?
-        } else {
-            self.reply_recv
-                .recv()
-                .map_err(|_| io::ErrorKind::UnexpectedEof.into())
-                .ctx("receiving reply (route set?)")?
-        }?;
+                .iter()
+                .find(|p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id));
+        // .map_err(|_| io::ErrorKind::UnexpectedEof.into())
+        // .ctx("receiving reply (route set?)")?
+        // }?;
+
+        if reply.is_none() {
+            return Err(Error::Reply(cmd.action(), "no response", 0));
+        }
+
+        let reply = reply.unwrap();
+
+        if reply.is_err() {
+            //let err_msg = format!("Erroneous response: {}", reply.err().unwrap());
+            //TODO: Improve error reporting.
+            return Err(Error::Reply(cmd.action(), "Erroneous response", 0));
+        }
+        let reply = reply.unwrap();
 
         // Validate the incoming reply.  The reader thread already made sure that
         // it is consistent and addressed to us.
 
         // The source netid/port must match what we sent.
-        if reply[14..22] != request[6..14] {
+        if reply.raw[14..22] != request[6..14] {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
         // Read the other fields we need.
-        assert!(reply.len() >= AMS_HEADER_SIZE);
-        let mut ptr = &reply[22..];
-        let ret_cmd = ptr.read_u16::<LE>().expect("size");
-        let state_flags = ptr.read_u16::<LE>().expect("size");
-        let data_len = ptr.read_u32::<LE>().expect("size");
-        let error_code = ptr.read_u32::<LE>().expect("size");
-        let response_id = ptr.read_u32::<LE>().expect("size");
-        let result = if reply.len() >= AMS_HEADER_SIZE + 4 {
-            ptr.read_u32::<LE>().expect("size")
-        } else {
-            0 // this must be because an error code is already set
-        };
+        // assert!(reply.len() >= AMS_HEADER_SIZE);
+        // let mut ptr = &reply[22..];
+        // let ret_cmd = ptr.read_u16::<LE>().expect("size");
+        // let state_flags = ptr.read_u16::<LE>().expect("size");
+        // let data_len = ptr.read_u32::<LE>().expect("size");
+        // let error_code = ptr.read_u32::<LE>().expect("size");
+        // let response_id = ptr.read_u32::<LE>().expect("size");
+        // let result = if reply.len() >= AMS_HEADER_SIZE + 4 {
+        //     ptr.read_u32::<LE>().expect("size")
+        // } else {
+        //     0 // this must be because an error code is already set
+        // };
 
         // Command must match.
-        if ret_cmd != cmd as u16 {
+        if reply.ret_cmd != cmd as u16 {
             return Err(Error::Reply(
                 cmd.action(),
                 "unexpected command",
-                ret_cmd.into(),
+                reply.ret_cmd.into(),
             ));
         }
         // State flags must be "4 | 1".
-        if state_flags != 5 {
+        if reply.state_flags != 5 {
             return Err(Error::Reply(
                 cmd.action(),
                 "unexpected state flags",
-                state_flags.into(),
+                reply.state_flags.into(),
             ));
         }
         // Invoke ID must match what we sent.
-        if response_id != invoke_id {
-            return Err(Error::Reply(
-                cmd.action(),
-                "unexpected invoke ID",
-                response_id,
-            ));
-        }
+        // if response_id != invoke_id {
+        //     return Err(Error::Reply(
+        //         cmd.action(),
+        //         "unexpected invoke ID",
+        //         response_id,
+        //     ));
+        // }
         // Check error code in AMS header.
-        if error_code != 0 {
-            return ads_error(cmd.action(), error_code);
+        if reply.error_code != 0 {
+            return ads_error(cmd.action(), reply.error_code);
         }
         // Check result field in payload, only relevant if error_code == 0.
-        if result != 0 {
-            return ads_error(cmd.action(), result);
+        if reply.result != 0 {
+            return ads_error(cmd.action(), reply.result);
         }
 
         // If we don't want return data, we're done.
         if data_out.is_empty() {
-            let _ = self.buf_send.send(reply);
+            let _ = self.buf_send.send(reply.raw);
             return Ok(0);
         }
 
         // Check returned length, it needs to fill at least the first data_out
         // buffer.  This also ensures that we had a result field.
-        if (data_len as usize) < data_out[0].len() + 4 {
+        if (reply.data_len as usize) < data_out[0].len() + 4 {
             return Err(Error::Reply(
                 cmd.action(),
                 "got less data than expected",
-                data_len,
+                reply.data_len,
             ));
         }
 
         // The pure user data length, without the result field.
-        let data_len = data_len as usize - 4;
+        let data_len = reply.data_len as usize - 4;
 
         // Distribute the data into the user output buffers, up to the returned
         // data length.
@@ -459,7 +515,7 @@ impl Client {
         let mut rest_len = data_len;
         for buf in data_out {
             let n = buf.len().min(rest_len);
-            buf[..n].copy_from_slice(&reply[offset..][..n]);
+            buf[..n].copy_from_slice(&reply.raw[offset..][..n]);
             offset += n;
             rest_len -= n;
             if rest_len == 0 {
@@ -468,7 +524,7 @@ impl Client {
         }
 
         // Send back the Vec buffer to the reader thread.
-        let _ = self.buf_send.send(reply);
+        //let _ = self.buf_send.send(reply.raw);
 
         // Return either the error or the length of data.
         Ok(data_len)
@@ -481,7 +537,7 @@ struct Reader {
     socket: TcpStream,
     source: [u8; 8],
     buf_recv: Receiver<Vec<u8>>,
-    reply_send: Sender<Result<Vec<u8>>>,
+    reply_send: Sender<Result<AdsResponse>>,
     notif_send: Sender<notif::Notification>,
 }
 
@@ -560,7 +616,11 @@ impl Reader {
             // If it looks like a reply, send it back to the requesting thread,
             // it will handle further validation.
             if LE::read_u16(&buf[22..24]) != Command::Notification as u16 {
-                if self.reply_send.send(Ok(buf)).is_err() {
+                if self
+                    .reply_send
+                    .send(Ok(AdsResponse::from_bytes(&buf)))
+                    .is_err()
+                {
                     // Client must have been shut down.
                     return;
                 }
