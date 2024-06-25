@@ -121,9 +121,10 @@ struct AdsResponse {
     data_len: u32,
     error_code: u32,
     invoke_id: u32,
+    source: Vec<u8>,
     result: u32,
     data: Option<Vec<u8>>,
-    raw: Vec<u8>,
+    //raw: Vec<u8>,
 }
 
 impl AdsResponse {
@@ -137,20 +138,14 @@ impl AdsResponse {
             data_len: ptr.read_u32::<LE>().expect("size"),
             error_code: ptr.read_u32::<LE>().expect("size"),
             invoke_id: ptr.read_u32::<LE>().expect("size"),
+            source: reply[14..22].to_vec(),
             result: if reply.len() >= AMS_HEADER_SIZE + 4 {
                 ptr.read_u32::<LE>().expect("size")
             } else {
                 0 // this must be because an error code is already set
             },
             data: Some(reply[AMS_HEADER_SIZE + 4..].to_vec()),
-            raw: reply.clone(),
-        } //;
-
-        // if message.data_len > 0 {
-        //     message.data = Some(reply[AMS_HEADER_SIZE + 4..].to_vec());
-        // }
-
-        //message
+        }
     }
 }
 
@@ -169,11 +164,8 @@ pub struct Client {
     read_timeout: Option<Duration>,
     /// The AMS address of the client
     source: AmsAddr,
-    /// Sender for used Vec buffers to the reader thread
-    buf_send: Sender<Vec<u8>>,
     /// Receiver for synchronous replies: used in `communicate`
     reply_recv: Receiver<Result<AdsResponse>>,
-
     /// Receiver for notifications: cloned and given out to interested parties
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
@@ -303,7 +295,6 @@ impl Client {
         // Clone the socket for the reader thread and create our channels for
         // bidirectional communication.
         let socket_clone = socket.try_clone().ctx("cloning TCP socket")?;
-        let (buf_send, buf_recv) = bounded(10);
         let (reply_send, reply_recv) = bounded(1);
         let (notif_send, notif_recv) = unbounded();
         let mut source_bytes = [0; 8];
@@ -313,7 +304,6 @@ impl Client {
         let reader = Reader {
             socket: socket_clone,
             source: source_bytes,
-            buf_recv,
             reply_send,
             notif_send,
         };
@@ -322,7 +312,6 @@ impl Client {
         Ok(Client {
             socket,
             source,
-            buf_send,
             reply_recv,
             notif_recv,
             invoke_id: AtomicU32::new(0),
@@ -437,7 +426,7 @@ impl Client {
         // it is consistent and addressed to us.
 
         // The source netid/port must match what we sent.
-        if reply.raw[14..22] != request[6..14] {
+        if reply.source != request[6..14] {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
 
@@ -469,13 +458,14 @@ impl Client {
 
         // If we don't want return data, we're done.
         if data_out.is_empty() {
-            let _ = self.buf_send.send(reply.raw);
             return Ok(0);
         }
 
         // Check returned length, it needs to fill at least the first data_out
         // buffer.  This also ensures that we had a result field.
-        if (reply.data_len as usize) < data_out[0].len() + 4 {
+        if (reply.data_len as usize) < data_out[0].len() + 4
+            || data_out[0].len() > 0 && reply.data.is_none()
+        {
             return Err(Error::Reply(
                 cmd.action(),
                 "got less data than expected",
@@ -485,23 +475,22 @@ impl Client {
 
         // The pure user data length, without the result field.
         let data_len = reply.data_len as usize - 4;
+        let data = reply.data.unwrap();
 
         // Distribute the data into the user output buffers, up to the returned
         // data length.
-        let mut offset = AMS_HEADER_SIZE + 4;
+        let mut offset = 0;
         let mut rest_len = data_len;
+
         for buf in data_out {
             let n = buf.len().min(rest_len);
-            buf[..n].copy_from_slice(&reply.raw[offset..][..n]);
+            buf[..n].copy_from_slice(&data[offset..][..n]);
             offset += n;
             rest_len -= n;
             if rest_len == 0 {
                 break;
             }
         }
-
-        // Send back the Vec buffer to the reader thread.
-        //let _ = self.buf_send.send(reply.raw);
 
         // Return either the error or the length of data.
         Ok(data_len)
@@ -513,7 +502,6 @@ impl Client {
 struct Reader {
     socket: TcpStream,
     source: [u8; 8],
-    buf_recv: Receiver<Vec<u8>>,
     reply_send: Sender<Result<AdsResponse>>,
     notif_send: Sender<notif::Notification>,
 }
@@ -529,10 +517,7 @@ impl Reader {
     fn run_inner(&mut self) {
         loop {
             // Get a buffer from the free-channel or create a new one.
-            let mut buf = self
-                .buf_recv
-                .try_recv()
-                .unwrap_or_else(|_| Vec::with_capacity(DEFAULT_BUFFER_SIZE));
+            let mut buf = Vec::with_capacity(DEFAULT_BUFFER_SIZE);
 
             // Read a header from the socket.
             buf.resize(TCP_HEADER_SIZE, 0);
@@ -1438,6 +1423,50 @@ impl DelNotifRequest {
     }
 }
 
+fn recv_filtered_timeout<T, F>(receiver: &Receiver<T>, filter: F, timeout: Duration) -> Option<T>
+where
+    F: Fn(&T) -> bool,
+{
+    let start = Instant::now();
+    let condvar = Condvar::new();
+    let mutex = Mutex::new(());
+
+    loop {
+        // Check if the timeout has elapsed
+        if start.elapsed() >= timeout {
+            return None;
+        }
+
+        // Try to receive a message from the channel
+        match receiver.try_recv() {
+            Ok(msg) => {
+                // Check if the message matches the filter
+                if filter(&msg) {
+                    return Some(msg);
+                } else {
+                    // Sleep for a short duration to avoid busy waiting
+                    let guard = mutex.lock().unwrap();
+                    let remaining = timeout
+                        .checked_sub(start.elapsed())
+                        .unwrap_or_else(|| Duration::from_millis(0));
+                    let _ = condvar.wait_timeout(guard, remaining).unwrap();
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                // Sleep for a short duration to avoid busy waiting
+                let guard = mutex.lock().unwrap();
+                let remaining = timeout
+                    .checked_sub(start.elapsed())
+                    .unwrap_or_else(|| Duration::from_millis(0));
+                let _ = condvar.wait_timeout(guard, remaining).unwrap();
+            }
+            Err(TryRecvError::Disconnected) => {
+                return None;
+            }
+        }
+    }
+}
+
 fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
     // Calculate the initial (using buffer sizes) and actual (using result
     // sizes) offsets of each request.
@@ -1521,48 +1550,4 @@ fn test_fixup_buffers() {
     assert!(&reqs[3].rbuf[..4] == b"abcd");
     assert!(&reqs[1].rbuf[..6] == b"ABCDEF");
     assert!(&reqs[0].rbuf[..8] == b"12345678");
-}
-
-fn recv_filtered_timeout<T, F>(receiver: &Receiver<T>, filter: F, timeout: Duration) -> Option<T>
-where
-    F: Fn(&T) -> bool,
-{
-    let start = Instant::now();
-    let condvar = Condvar::new();
-    let mutex = Mutex::new(());
-
-    loop {
-        // Check if the timeout has elapsed
-        if start.elapsed() >= timeout {
-            return None;
-        }
-
-        // Try to receive a message from the channel
-        match receiver.try_recv() {
-            Ok(msg) => {
-                // Check if the message matches the filter
-                if filter(&msg) {
-                    return Some(msg);
-                } else {
-                    // Sleep for a short duration to avoid busy waiting
-                    let guard = mutex.lock().unwrap();
-                    let remaining = timeout
-                        .checked_sub(start.elapsed())
-                        .unwrap_or_else(|| Duration::from_millis(0));
-                    let _ = condvar.wait_timeout(guard, remaining).unwrap();
-                }
-            }
-            Err(TryRecvError::Empty) => {
-                // Sleep for a short duration to avoid busy waiting
-                let guard = mutex.lock().unwrap();
-                let remaining = timeout
-                    .checked_sub(start.elapsed())
-                    .unwrap_or_else(|| Duration::from_millis(0));
-                let _ = condvar.wait_timeout(guard, remaining).unwrap();
-            }
-            Err(TryRecvError::Disconnected) => {
-                return None;
-            }
-        }
-    }
 }
