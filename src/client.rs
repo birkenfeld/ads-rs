@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use byteorder::{ByteOrder, ReadBytesExt, LE};
+use byteorder::{ByteOrder, LE};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use itertools::Itertools;
 
@@ -18,9 +18,9 @@ use crate::errors::{ads_error, ErrContext};
 use crate::notif;
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
+use crate::response::AdsResponse;
 use zerocopy::byteorder::{U16, U32};
 use zerocopy::{AsBytes, FromBytes};
-
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
 #[repr(u16)]
@@ -114,41 +114,6 @@ pub enum Source {
     Request,
 }
 
-#[derive(Clone, Debug, Default)]
-struct AdsResponse {
-    ret_cmd: u16,
-    state_flags: u16,
-    data_len: u32,
-    error_code: u32,
-    invoke_id: u32,
-    source: Vec<u8>,
-    result: u32,
-    data: Option<Vec<u8>>,
-    //raw: Vec<u8>,
-}
-
-impl AdsResponse {
-    /// Creates a Message from recieved bytes
-    pub fn from_bytes(reply: &Vec<u8>) -> Self {
-        let mut ptr = &reply[22..];
-        //let mut message =
-        AdsResponse {
-            ret_cmd: ptr.read_u16::<LE>().expect("size"),
-            state_flags: ptr.read_u16::<LE>().expect("size"),
-            data_len: ptr.read_u32::<LE>().expect("size"),
-            error_code: ptr.read_u32::<LE>().expect("size"),
-            invoke_id: ptr.read_u32::<LE>().expect("size"),
-            source: reply[14..22].to_vec(),
-            result: if reply.len() >= AMS_HEADER_SIZE + 4 {
-                ptr.read_u32::<LE>().expect("size")
-            } else {
-                0 // this must be because an error code is already set
-            },
-            data: Some(reply[AMS_HEADER_SIZE + 4..].to_vec()),
-        }
-    }
-}
-
 /// Represents a connection to a ADS server.
 ///
 /// The Client's communication methods use `&self`, so that it can be freely
@@ -178,10 +143,9 @@ impl Drop for Client {
     fn drop(&mut self) {
         // Close all open notification handles.
         {
-            let handles = match self.notif_handles.lock() {
-                Ok(h) => h,
-                Err(_) => return,
-            };
+            //Panic if this fails.
+            let handles = self.notif_handles.lock().unwrap();
+
             for (addr, handle) in handles.iter() {
                 let _ = self.device(*addr).delete_notification(*handle);
             }
@@ -401,60 +365,58 @@ impl Client {
         (&self.socket).write_all(&request).ctx("sending request")?;
 
         // Get a reply from the reader thread, with timeout or not.
-        let reply = if let Some(tmo) = self.read_timeout {
-            recv_filtered_timeout(
+        let found_response = match self.read_timeout {
+            Some(tmo) => recv_filtered_timeout(
                 &self.reply_recv,
                 |p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id),
                 tmo,
-            )
-        } else {
-            self.reply_recv
+            ),
+            None => self
+                .reply_recv
                 .iter()
-                .find(|p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id))
+                .find(|p| p.as_ref().is_ok_and(|f| f.invoke_id == invoke_id)),
         };
 
-        let reply = match reply {
-            Some(r) => r,
+        let response = match found_response {
+            Some(r) => match r {
+                Ok(r) => r,
+                Err(e) => return Err(e),
+            },
             None => return Err(Error::Reply(cmd.action(), "no response", 0)),
-        };
-
-        let reply = match reply {
-            Ok(r) => r,
-            Err(e) => return Err(e),
         };
 
         // Validate the incoming reply.  The reader thread already made sure that
         // it is consistent and addressed to us.
 
         // The source netid/port must match what we sent.
-        if reply.source != request[6..14] {
+        if response.source != request[6..14] {
             return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
         }
 
         // Command must match.
-        if reply.ret_cmd != cmd as u16 {
+        if response.ret_cmd != cmd as u16 {
             return Err(Error::Reply(
                 cmd.action(),
                 "unexpected command",
-                reply.ret_cmd.into(),
+                response.ret_cmd.into(),
             ));
         }
         // State flags must be "4 | 1".
-        if reply.state_flags != 5 {
+        if response.state_flags != 5 {
             return Err(Error::Reply(
                 cmd.action(),
                 "unexpected state flags",
-                reply.state_flags.into(),
+                response.state_flags.into(),
             ));
         }
 
         // Check error code in AMS header.
-        if reply.error_code != 0 {
-            return ads_error(cmd.action(), reply.error_code);
+        if response.error_code != 0 {
+            return ads_error(cmd.action(), response.error_code);
         }
         // Check result field in payload, only relevant if error_code == 0.
-        if reply.result != 0 {
-            return ads_error(cmd.action(), reply.result);
+        if response.result != 0 {
+            return ads_error(cmd.action(), response.result);
         }
 
         // If we don't want return data, we're done.
@@ -464,19 +426,19 @@ impl Client {
 
         // Check returned length, it needs to fill at least the first data_out
         // buffer.  This also ensures that we had a result field.
-        if (reply.data_len as usize) < data_out[0].len() + 4
-            || data_out[0].len() > 0 && reply.data.is_none()
+        if (response.data_len as usize) < data_out[0].len() + 4
+            || data_out[0].len() > 0 && response.data.is_none()
         {
             return Err(Error::Reply(
                 cmd.action(),
                 "got less data than expected",
-                reply.data_len,
+                response.data_len,
             ));
         }
 
         // The pure user data length, without the result field.
-        let data_len = reply.data_len as usize - 4;
-        let data = match reply.data {
+        let data_len = response.data_len as usize - 4;
+        let data = match response.data {
             Some(d) => d,
             None => return Err(Error::Ads("Data not available", "", 0)),
         };
@@ -965,7 +927,7 @@ impl<'c> Device<'c> {
         {
             let mut handles = match self.client.notif_handles.lock() {
                 Ok(h) => h,
-                Err(_) => return Err(Error::Other("Could not aquire lock on notif_handles")),
+                Err(_) => return Err(Error::Locking("notif_handles")),
             };
             handles.insert((self.addr, handle.get()));
         }
@@ -1002,7 +964,7 @@ impl<'c> Device<'c> {
         {
             let mut handles = match self.client.notif_handles.lock() {
                 Ok(h) => h,
-                Err(_) => return Err(Error::Other("Could not aquire lock on notif_handles")),
+                Err(_) => return Err(Error::Locking("notif_handles")),
             };
             for req in requests {
                 if let Ok(handle) = req.handle() {
@@ -1024,7 +986,7 @@ impl<'c> Device<'c> {
         {
             let mut handles = match self.client.notif_handles.lock() {
                 Ok(h) => h,
-                Err(_) => return Err(Error::Other("Could not aquire lock on notif_handles")),
+                Err(_) => return Err(Error::Locking("notif_handles")),
             };
             handles.remove(&(self.addr, handle));
         }
@@ -1061,7 +1023,7 @@ impl<'c> Device<'c> {
         {
             let mut handles = match self.client.notif_handles.lock() {
                 Ok(h) => h,
-                Err(_) => return Err(Error::Other("Could not aquire lock on notif_handles")),
+                Err(_) => return Err(Error::Locking("notif_handles")),
             };
             for req in requests {
                 if req.ensure().is_ok() {
@@ -1455,23 +1417,7 @@ where
         // Try to receive a message from the channel
         match receiver.iter().find(&filter) {
             Some(msg) => {
-                // Check if the message matches the filter
-                if filter(&msg) {
-                    return Some(msg);
-                } else {
-                    // Sleep for a short duration to avoid busy waiting
-                    let guard = match mutex.lock() {
-                        Ok(m) => m,
-                        Err(_) => return None,
-                    };
-                    let remaining = timeout
-                        .checked_sub(start.elapsed())
-                        .unwrap_or_else(|| Duration::from_millis(0));
-                    match condvar.wait_timeout(guard, remaining) {
-                        Ok(_) => {}
-                        Err(_) => return None,
-                    }
-                }
+                return Some(msg);
             }
             None => {
                 // Sleep for a short duration to avoid busy waiting

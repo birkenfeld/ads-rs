@@ -22,9 +22,9 @@ pub enum Error {
     #[error("data length or duration exceeds 32 bits")]
     Overflow(#[from] std::num::TryFromIntError),
 
-    /// Any other error
-    #[error("{0}")]
-    Other(&'static str),
+    /// Errors while aquiring locks
+    #[error("Error acquiring lock on: {0}")]
+    Locking(&'static str),
 }
 
 pub(crate) trait ErrContext {
