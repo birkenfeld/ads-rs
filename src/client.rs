@@ -11,7 +11,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use byteorder::{ByteOrder, ReadBytesExt, LE};
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
@@ -1453,8 +1453,8 @@ where
         }
 
         // Try to receive a message from the channel
-        match receiver.try_recv() {
-            Ok(msg) => {
+        match receiver.iter().find(&filter) {
+            Some(msg) => {
                 // Check if the message matches the filter
                 if filter(&msg) {
                     return Some(msg);
@@ -1473,7 +1473,7 @@ where
                     }
                 }
             }
-            Err(TryRecvError::Empty) => {
+            None => {
                 // Sleep for a short duration to avoid busy waiting
                 let guard = match mutex.lock() {
                     Ok(m) => m,
@@ -1486,9 +1486,6 @@ where
                     Ok(_) => {}
                     Err(_) => return None,
                 }
-            }
-            Err(TryRecvError::Disconnected) => {
-                return None;
             }
         }
     }
