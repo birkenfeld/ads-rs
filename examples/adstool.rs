@@ -7,22 +7,21 @@ use std::str::FromStr;
 use byteorder::{ByteOrder, BE, LE, WriteBytesExt};
 use itertools::Itertools;
 use parse_int::parse;
-use structopt::{clap::AppSettings, clap::ArgGroup, StructOpt};
+use clap::{Parser, Subcommand, ArgGroup, AppSettings};
 use strum::EnumString;
 use quick_xml::{events::Event, name::QName};
 use time::OffsetDateTime;
 
-#[derive(StructOpt, Debug)]
-#[structopt(global_setting = AppSettings::UnifiedHelpMessage)]
-#[structopt(global_setting = AppSettings::DisableHelpSubcommand)]
-#[structopt(global_setting = AppSettings::DeriveDisplayOrder)]
+#[derive(Parser, Debug)]
+#[clap(disable_help_subcommand = true)]
+#[clap(global_setting = AppSettings::DeriveDisplayOrder)]
 /// A utility for managing ADS servers.
 struct Args {
-    #[structopt(subcommand)]
+    #[clap(subcommand)]
     cmd: Cmd,
     /// If true, automatically try to set a route with the default password
     /// before connecting.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     autoroute: bool,
     /// Target for the command.
     ///
@@ -44,22 +43,27 @@ struct Args {
     target: Target,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 enum Cmd {
     /// Query basic information about the system over UDP.
     Info,
     /// Query extended information about the system over ADS.
     TargetDesc,
+    #[clap(subcommand)]
     Route(RouteAction),
+    #[clap(subcommand)]
     File(FileAction),
+    #[clap(subcommand)]
     License(LicenseAction),
     State(StateArgs),
+    #[clap(subcommand)]
     Raw(RawAction),
+    #[clap(subcommand)]
     Var(VarAction),
     Exec(ExecArgs),
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 /// Manipulate ADS routes.
 enum RouteAction {
     /// Add an ADS route to the remote TwinCAT system.
@@ -68,7 +72,7 @@ enum RouteAction {
     List,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 struct AddRouteArgs {
     /// hostname or IP address of the route's destionation
     addr: String,
@@ -77,23 +81,23 @@ struct AddRouteArgs {
     netid: ads::AmsNetId,
 
     /// name of the new route (defaults to `addr`)
-    #[structopt(long)]
+    #[clap(long)]
     routename: Option<String>,
 
     /// password for logging into the system (defaults to `1`)
-    #[structopt(long, default_value = "1")]
+    #[clap(long, default_value = "1")]
     password: String,
 
     /// username for logging into the system (defaults to `Administrator`)
-    #[structopt(long, default_value = "Administrator")]
+    #[clap(long, default_value = "Administrator")]
     username: String,
 
     /// mark route as temporary?
-    #[structopt(long)]
+    #[clap(long)]
     temporary: bool,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 /// Execute operations on files on the TwinCAT system.
 enum FileAction {
     /// List remote files in the given directory.
@@ -111,7 +115,7 @@ enum FileAction {
         /// the file path
         path: String,
         /// whether to append to the file when writing
-        #[structopt(long)]
+        #[clap(long)]
         append: bool,
     },
     /// Delete a remote file.
@@ -121,7 +125,7 @@ enum FileAction {
     },
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 /// Query different license ids.
 enum LicenseAction {
     /// Get the platform ID
@@ -134,7 +138,7 @@ enum LicenseAction {
     Modules,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 /// Read or write the ADS state of the device.
 struct StateArgs {
     /// if given, the target state
@@ -145,60 +149,60 @@ struct StateArgs {
     target_state: Option<ads::AdsState>,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 /// Raw read or write access for an indexgroup.
 enum RawAction {
     /// Read some data from an index.  Specify either --length (to print raw
     /// bytes) or --type (to convert to a data type and print that).
-    #[structopt(group = ArgGroup::with_name("spec").required(true))]
+    #[clap(group = ArgGroup::with_name("spec").required(true))]
     Read {
         /// the index group, can be 0xABCD
-        #[structopt(parse(try_from_str = parse))]
+        #[clap(parse(try_from_str = parse))]
         index_group: u32,
         /// the index offset, can be 0xABCD
-        #[structopt(parse(try_from_str = parse))]
+        #[clap(parse(try_from_str = parse))]
         index_offset: u32,
         /// the length, can be 0xABCD
-        #[structopt(long, parse(try_from_str = parse), group = "spec")]
+        #[clap(long, parse(try_from_str = parse), group = "spec")]
         length: Option<usize>,
         /// the data type
-        #[structopt(long, group = "spec")]
+        #[clap(long, group = "spec")]
         r#type: Option<VarType>,
         /// whether to print integers as hex, or raw data as hexdump
-        #[structopt(long)]
+        #[clap(long)]
         hex: bool,
     },
     /// Write some data to an index.  Data is read from stdin.
     Write {
         /// the index group, can be 0xABCD
-        #[structopt(parse(try_from_str = parse))]
+        #[clap(parse(try_from_str = parse))]
         index_group: u32,
         /// the index offset, can be 0xABCD
-        #[structopt(parse(try_from_str = parse))]
+        #[clap(parse(try_from_str = parse))]
         index_offset: u32,
     },
     /// Write some data (read from stdin), then read data from an index.
-    #[structopt(group = ArgGroup::with_name("spec").required(true))]
+    #[clap(group = ArgGroup::with_name("spec").required(true))]
     WriteRead {
         /// the index group, can be 0xABCD
-        #[structopt(parse(try_from_str = parse))]
+        #[clap(parse(try_from_str = parse))]
         index_group: u32,
         /// the index offset, can be 0xABCD
-        #[structopt(parse(try_from_str = parse))]
+        #[clap(parse(try_from_str = parse))]
         index_offset: u32,
         /// the length to read, can be 0xABCD
-        #[structopt(long, parse(try_from_str = parse), group = "spec")]
+        #[clap(long, parse(try_from_str = parse), group = "spec")]
         length: Option<usize>,
         /// the data type to interpret the read data as
-        #[structopt(long, group = "spec")]
+        #[clap(long, group = "spec")]
         r#type: Option<VarType>,
         /// whether to print integers as hex, or raw data as hexdump
-        #[structopt(long)]
+        #[clap(long)]
         hex: bool,
     },
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Subcommand, Debug)]
 /// Variable read or write access.
 enum VarAction {
     /// List variables together with their types, sizes and offsets.
@@ -212,18 +216,18 @@ enum VarAction {
         filter: Option<String>,
     },
     /// Read a variable by name.
-    #[structopt(group = ArgGroup::with_name("spec"))]
+    #[clap(group = ArgGroup::with_name("spec"))]
     Read {
         /// the variable name
         name: String,
         /// the variable type
-        #[structopt(long, group = "spec")]
+        #[clap(long, group = "spec")]
         r#type: Option<VarType>,
         /// the length to read, can be 0xABCD
-        #[structopt(long, parse(try_from_str = parse), group = "spec")]
+        #[clap(long, parse(try_from_str = parse), group = "spec")]
         length: Option<usize>,
         /// whether to print integers as hex
-        #[structopt(long)]
+        #[clap(long)]
         hex: bool,
     },
     /// Write a variable by name.  If --type is given, the new value
@@ -233,21 +237,21 @@ enum VarAction {
         /// the variable name
         name: String,
         /// the new value, if given, to write
-        #[structopt(requires = "type")]
+        #[clap(requires = "type")]
         value: Option<String>,
         /// the variable type
-        #[structopt(long)]
+        #[clap(long)]
         r#type: Option<VarType>,
     }
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(Parser, Debug)]
 /// Execute a system command on the target.
 struct ExecArgs {
     /// the executable with path
     program: String,
     /// the working directory (defaults to the executable's)
-    #[structopt(long)]
+    #[clap(long)]
     workingdir: Option<String>,
     /// arguments for the executable
     args: Vec<String>,

@@ -20,6 +20,6 @@ once_cell = "1.19.0"
 parse_int = "0.6.0"
 quick-xml = "0.36.1"
 regex = "<1.10.0"
-structopt = "0.3.26"
+clap = { version = "3.2.25", features = ["derive"] }
 strum = { version = "0.26.3", features = ["derive"] }
 time = { version = "<0.3.18", features = ["formatting"] }
