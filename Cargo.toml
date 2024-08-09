@@ -22,4 +22,4 @@ quick-xml = "0.36.1"
 regex = "<1.10.0"
 structopt = "0.3.26"
 strum = { version = "0.26.3", features = ["derive"] }
-time = { version = "<0.3.21", features = ["formatting"] }
+time = { version = "<0.3.18", features = ["formatting"] }

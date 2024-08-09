@@ -188,7 +188,7 @@ impl Client {
         let mut socket = if let Some(timeout) = timeouts.connect {
             TcpStream::connect_timeout(&addr, timeout).ctx("connecting TCP socket with timeout")?
         } else {
-            TcpStream::connect(&addr).ctx("connecting TCP socket")?
+            TcpStream::connect(addr).ctx("connecting TCP socket")?
         };
 
         // Disable Nagle to ensure small requests are sent promptly; we're

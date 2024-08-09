@@ -389,7 +389,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         let namelen = LE::read_u32(&routeinfo[36..]) as usize;
                         let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen-1]);
                         let name = String::from_utf8_lossy(&routeinfo[44+hostlen..][..namelen-1]);
-                        print!("{:-20} {:-22} {:-18}", name, netid.to_string(), host);
+                        print!("{:-20} {:-22} {:-18}", name, netid, host);
                         if flags & 0x01 != 0 { print!(" temporary"); }
                         if flags & 0x80 != 0 { print!(" unidirectional"); }
                         if flags & 0x100 != 0 { print!(" virtual/nat"); }
@@ -446,7 +446,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let dev = client.device(amsaddr);
             match subargs {
                 FileAction::List { path } => {
-                    let entries = file::listdir(dev, &path)?;
+                    let entries = file::listdir(dev, path)?;
                     for (name, attr, size) in entries {
                         println!("{} {:8} {}",
                                  if attr & file::DIRECTORY != 0 { "D" } else { " " },
@@ -465,7 +465,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     std::io::copy(&mut stdin(), &mut file)?;
                 }
                 FileAction::Delete { path } => {
-                    file::File::delete(dev, &path, file::ENABLE_DIR)?;
+                    file::File::delete(dev, path, file::ENABLE_DIR)?;
                 }
             }
         }
@@ -612,7 +612,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     for (name, ty) in &type_map {
                         if name.to_lowercase().contains(&filter) {
                             println!("**          ({:6x}) {:40}", ty.size, name);
-                            print_fields(&type_map, 0, &name, 1);
+                            print_fields(&type_map, 0, name, 1);
                         }
                     }
                 }
@@ -774,7 +774,7 @@ fn convert_filetime(ft: i64) -> Option<OffsetDateTime> {
 /// Format a GUID.
 fn format_guid(guid: &[u8]) -> String {
     format!("{:08X}-{:04X}-{:04X}-{:04X}-{:012X}",
-            LE::read_u32(&guid),
+            LE::read_u32(guid),
             LE::read_u16(&guid[4..]),
             LE::read_u16(&guid[6..]),
             BE::read_u16(&guid[8..]),
