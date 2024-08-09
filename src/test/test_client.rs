@@ -270,7 +270,7 @@ fn test_string_type() {
         let ret = device.read_value::<String5>(0x4020, 7).unwrap();
         assert!(<[u8; 5]>::from(ret) == [b'a', b'b', b'c', 0, 0]);
         assert!(String::try_from(ret).unwrap() == "abc");
-        assert!(<Vec<u8>>::try_from(ret).unwrap() == [b'a', b'b', b'c']);
+        assert!(<Vec<u8>>::from(ret) == [b'a', b'b', b'c']);
     })
 }
 
@@ -300,6 +300,6 @@ fn test_wstring_type() {
         let ret = device.read_value::<WString5>(0x4020, 7).unwrap();
         assert!(<[u16; 5]>::from(ret) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
         assert!(String::try_from(ret).unwrap() == "abc");
-        assert!(<Vec<u16>>::try_from(ret).unwrap() == [b'a' as u16, b'b' as u16, b'c' as u16]);
+        assert!(<Vec<u16>>::from(ret) == [b'a' as u16, b'b' as u16, b'c' as u16]);
     })
 }
