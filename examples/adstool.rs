@@ -10,7 +10,7 @@ use parse_int::parse;
 use clap::{Parser, Subcommand, ArgGroup, AppSettings};
 use strum::EnumString;
 use quick_xml::{events::Event, name::QName};
-use time::OffsetDateTime;
+use chrono::{DateTime, Utc};
 
 #[derive(Parser, Debug)]
 #[clap(disable_help_subcommand = true)]
@@ -769,10 +769,10 @@ fn hexdump(mut data: &[u8]) {
 const EPOCH_OFFSET: i64 = 11644473600;
 
 /// Convert Windows FILETIME to DateTime
-fn convert_filetime(ft: i64) -> Option<OffsetDateTime> {
+fn convert_filetime(ft: i64) -> Option<DateTime<Utc>> {
     if ft == 0 { return None; }
     let unix_ts = ft / 10_000_000 - EPOCH_OFFSET;
-    OffsetDateTime::from_unix_timestamp(unix_ts).ok()
+    DateTime::from_timestamp(unix_ts, 0)
 }
 
 /// Format a GUID.
