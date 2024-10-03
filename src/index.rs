@@ -1,4 +1,6 @@
-//! Well-known index groups as defined
+//! Well-known ADS index groups.
+//!
+//! These are defined
 //! [here](https://infosys.beckhoff.com/content/1033/tc3_ads_intro/117241867.html?id=1944752650545554679)
 //! and [here](https://github.com/Beckhoff/ADS/blob/master/AdsLib/standalone/AdsDef.h).
 
