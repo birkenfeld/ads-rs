@@ -63,7 +63,7 @@ impl<'c> Handle<'c> {
     }
 }
 
-impl<'a> Drop for Handle<'a> {
+impl Drop for Handle<'_> {
     fn drop(&mut self) {
         let _ = self.device.write(index::RELEASE_SYMHANDLE, 0,
                                   &self.handle.to_le_bytes());

@@ -67,7 +67,7 @@ pub fn listdir(device: Device, dirname: impl AsRef<[u8]>)
     }
 }
 
-impl<'a> io::Write for File<'a> {
+impl io::Write for File<'_> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         self.device.write_read(index::FILE_WRITE, self.handle, data, &mut [])
                    // need to convert errors back to io::Error
@@ -81,13 +81,13 @@ impl<'a> io::Write for File<'a> {
     }
 }
 
-impl<'a> std::io::Read for File<'a> {
+impl std::io::Read for File<'_> {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
         self.device.write_read(index::FILE_READ, self.handle, &[], data).map_err(map_error)
     }
 }
 
-impl<'a> Drop for File<'a> {
+impl Drop for File<'_> {
     fn drop(&mut self) {
         let _ = self.device.write_read(index::FILE_CLOSE, self.handle, &[], &mut []);
     }

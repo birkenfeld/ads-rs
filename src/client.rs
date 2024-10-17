@@ -524,7 +524,7 @@ pub struct Device<'c> {
     addr: AmsAddr,
 }
 
-impl<'c> Device<'c> {
+impl Device<'_> {
     /// Read the device's name + version.
     pub fn get_info(&self) -> Result<DeviceInfo> {
         let mut data = DeviceInfoRaw::new_zeroed();
