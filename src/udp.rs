@@ -6,8 +6,8 @@ use std::net::{ToSocketAddrs, UdpSocket};
 use std::{char, iter, str};
 
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
-use zerocopy::byteorder::{U16, U32};
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
+use zerocopy::byteorder::little_endian::{U16, U32};
+use zerocopy::{IntoBytes, FromBytes, Immutable};
 
 use crate::errors::ErrContext;
 use crate::{AmsAddr, AmsNetId, Error, Result};
@@ -295,13 +295,13 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
     })
 }
 
-#[derive(FromBytes, FromZeroes, AsBytes, Default)]
+#[derive(FromBytes, IntoBytes, Immutable, Default)]
 #[repr(C)]
 pub(crate) struct UdpHeader {
-    magic:     U32<LE>,
-    invoke_id: U32<LE>,
-    service:   U32<LE>,
+    magic:     U32,
+    invoke_id: U32,
+    service:   U32,
     src_netid: AmsNetId,
-    src_port:  U16<LE>,
-    num_items: U32<LE>,
+    src_port:  U16,
+    num_items: U32,
 }

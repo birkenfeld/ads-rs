@@ -5,7 +5,7 @@ use std::convert::TryInto;
 use std::io::Read;
 
 use byteorder::{ByteOrder, LE, ReadBytesExt};
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{FromBytes, IntoBytes, Immutable};
 
 use crate::errors::{Error, ErrContext};
 use crate::index;
@@ -51,14 +51,14 @@ impl<'c> Handle<'c> {
     ///
     /// Note: to be independent of the host's byte order, use the integer types
     /// defined in `zerocopy::byteorder`.
-    pub fn read_value<T: Default + AsBytes + FromBytes>(&self) -> Result<T> {
+    pub fn read_value<T: Default + IntoBytes + FromBytes>(&self) -> Result<T> {
         self.device.read_value(index::RW_SYMVAL_BYHANDLE, self.handle)
     }
 
     /// Write data of given type.
     ///
     /// See `read_value` for details.
-    pub fn write_value<T: AsBytes>(&self, value: &T) -> Result<()> {
+    pub fn write_value<T: IntoBytes + Immutable>(&self, value: &T) -> Result<()> {
         self.device.write_value(index::RW_SYMVAL_BYHANDLE, self.handle, value)
     }
 }

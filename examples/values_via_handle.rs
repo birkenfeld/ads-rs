@@ -2,9 +2,9 @@
 //! by redefining it as a Rust struct with zerocopy traits.
 
 use ads::{Client, Source, Timeouts, symbol::Handle};
-use zerocopy::{AsBytes, FromZeroes, FromBytes};
+use zerocopy::{FromBytes, IntoBytes};
 
-#[derive(Default, AsBytes, FromZeroes, FromBytes)]
+#[derive(Default, FromBytes, IntoBytes)]
 #[repr(packed)]
 struct Motor {
     position: f32,

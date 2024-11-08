@@ -11,8 +11,8 @@ use std::time::Duration;
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
 use zerocopy::{
-    byteorder::{U32, U64},
-    AsBytes, FromBytes, FromZeroes,
+    byteorder::little_endian::{U32, U64},
+    FromBytes, FromZeros, IntoBytes, Immutable
 };
 
 use crate::client::{AddNotif, AdsHeader, IndexLength, IndexLengthRW};
@@ -85,7 +85,7 @@ impl Server {
         loop {
             let opts = opts.lock().unwrap();
             let mut header = AdsHeader::new_zeroed();
-            if let Err(e) = socket.read_exact(header.as_bytes_mut()) {
+            if let Err(e) = socket.read_exact(header.as_mut_bytes()) {
                 if e.kind() == std::io::ErrorKind::UnexpectedEof {
                     // connection was closed
                     return;
@@ -214,7 +214,7 @@ impl Server {
         if data.len() != size_of::<IndexLength>() {
             return (vec![], 0x706);
         }
-        let request = IndexLength::read_from(data).unwrap();
+        let request = IndexLength::read_from_bytes(data).unwrap();
         let grp = request.index_group.get();
         let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
@@ -241,7 +241,7 @@ impl Server {
         if data.len() < size_of::<IndexLength>() {
             return (vec![], 0x706);
         }
-        let request = IndexLength::read_from(&data[..12]).unwrap();
+        let request = IndexLength::read_from_bytes(&data[..12]).unwrap();
         let grp = request.index_group.get();
         let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
@@ -273,7 +273,7 @@ impl Server {
         if data.len() < size_of::<IndexLengthRW>() {
             return (vec![], 0x706);
         }
-        let request = IndexLengthRW::read_from(&data[..16]).unwrap();
+        let request = IndexLengthRW::read_from_bytes(&data[..16]).unwrap();
         let off = request.index_offset.get();
         let rlen = request.read_length.get() as usize;
         let wlen = request.write_length.get() as usize;
@@ -416,7 +416,7 @@ impl Server {
         if data.len() != size_of::<AddNotif>() {
             return (vec![], 0x706);
         }
-        let request = AddNotif::read_from(data).unwrap();
+        let request = AddNotif::read_from_bytes(data).unwrap();
         let off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
 
@@ -448,13 +448,13 @@ impl Server {
     }
 }
 
-#[derive(AsBytes, FromBytes, FromZeroes, Debug, Default)]
+#[derive(FromBytes, IntoBytes, Immutable, Debug, Default)]
 #[repr(C)]
 struct SingleNotification {
-    len:     U32<LE>,
-    stamps:  U32<LE>,
-    stamp:   U64<LE>,
-    samples: U32<LE>,
-    handle:  U32<LE>,
-    size:    U32<LE>,
+    len:     U32,
+    stamps:  U32,
+    stamp:   U64,
+    samples: U32,
+    handle:  U32,
+    size:    U32,
 }

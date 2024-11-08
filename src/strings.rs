@@ -1,6 +1,6 @@
 //! Const-generic string types for representing fixed-length strings.
 
-use zerocopy::{FromBytes, FromZeroes};
+use zerocopy::{FromBytes, IntoBytes, Immutable};
 
 /// Represents a fixed-length byte string.
 ///
@@ -12,7 +12,7 @@ use zerocopy::{FromBytes, FromZeroes};
 ///
 /// It can be converted to a Rust `String` if it is UTF8 encoded.
 #[repr(C)]
-#[derive(Clone, Copy, FromBytes, FromZeroes)]
+#[derive(Clone, Copy, FromBytes, IntoBytes, Immutable)]
 pub struct String<const LEN: usize>([u8; LEN], u8);  // one extra NULL byte
 
 impl<const LEN: usize> String<LEN> {
@@ -124,11 +124,6 @@ impl<const LEN: usize> std::convert::TryFrom<String<LEN>> for std::string::Strin
     }
 }
 
-// zerocopy implementations
-
-unsafe impl<const LEN: usize> zerocopy::AsBytes for String<LEN> {
-    fn only_derive_is_allowed_to_implement_this_trait() { }
-}
 
 /// Represents a fixed-length wide string.
 ///
@@ -142,8 +137,9 @@ unsafe impl<const LEN: usize> zerocopy::AsBytes for String<LEN> {
 /// It can be converted to a Rust `String` if it is properly UTF16
 /// encoded.
 #[repr(C)]
-#[derive(Clone, Copy, FromBytes, FromZeroes)]
-pub struct WString<const LEN: usize>([u16; LEN], u16);  // one extra NULL byte
+// NOTE: can't derive IntoBytes automatically until zerocopy #10 is fixed.
+#[derive(Clone, Copy, FromBytes, Immutable)]
+pub struct WString<const LEN: usize, const LEN2: usize=1>([u16; LEN], u16);  // one extra NULL byte
 
 impl<const LEN: usize> WString<LEN> {
     /// Create a new empty string.
@@ -153,7 +149,8 @@ impl<const LEN: usize> WString<LEN> {
 
     /// Return the number of code units up to the first null.
     pub fn len(&self) -> usize {
-        self.0.iter().position(|&b| b == 0).unwrap_or(self.0.len())
+        let v = &self.0;
+        v.iter().position(|&b| b == 0).unwrap_or(self.0.len())
     }
 
     /// Returns true if the string is empty.
@@ -263,9 +260,11 @@ impl<const LEN: usize> std::convert::TryFrom<WString<LEN>> for std::string::Stri
     }
 }
 
-// zerocopy implementations
+// manual zerocopy implementation
 
-unsafe impl<const LEN: usize> zerocopy::AsBytes for WString<LEN> {
+// SAFETY: the layout of WString consists of only u16 elements; no padding is inserted
+// between them.
+unsafe impl<const LEN: usize> zerocopy::IntoBytes for WString<LEN> {
     fn only_derive_is_allowed_to_implement_this_trait() { }
 }
 

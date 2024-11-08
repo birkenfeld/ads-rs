@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
-use zerocopy::{AsBytes, FromBytes, FromZeroes};
+use zerocopy::{IntoBytes, FromBytes, Immutable};
 
 /// Represents an AMS NetID.
 ///
@@ -20,7 +20,7 @@ use zerocopy::{AsBytes, FromBytes, FromZeroes};
 /// sometimes even are identical to the device's IP address, there is no
 /// requirement for this, and one should never rely on it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug,
-         AsBytes, FromZeroes, FromBytes)]
+         FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 pub struct AmsNetId(pub [u8; 6]);
 
