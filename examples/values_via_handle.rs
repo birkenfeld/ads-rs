@@ -13,7 +13,7 @@ struct Motor {
 }
 
 fn main() {
-    let client = Client::new(("localhost", ads::PORT), Timeouts::none(), Source::Request).unwrap();
+    let client = Client::new(("127.0.0.1", ads::PORT), Timeouts::none(), Source::Request).unwrap();
     let dev = client.device(ads::AmsAddr::new([5, 62, 215, 36, 1, 1].into(), 851));
     let handle = Handle::new(dev, "MY_SYMBOL").unwrap();
     let motor = handle.read_value::<Motor>().unwrap();

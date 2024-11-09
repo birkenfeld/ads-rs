@@ -4,7 +4,7 @@ use ads::notif::{Attributes, TransmissionMode};
 use ads::{Client, Source, Timeouts};
 
 fn main() {
-    let client = Client::new(("localhost", ads::PORT), Timeouts::none(), Source::Request).unwrap();
+    let client = Client::new(("127.0.0.1", ads::PORT), Timeouts::none(), Source::Request).unwrap();
     let recv_notify = client.get_notification_channel();
     std::thread::spawn(move || {
         for msg in recv_notify.iter() {
