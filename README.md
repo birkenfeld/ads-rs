@@ -32,6 +32,10 @@ fn main() -> ads::Result<()> {
     // but can be explicitly specified as the third argument.
     let client = ads::Client::new(("plchost", ads::PORT), ads::Timeouts::none(),
                                   ads::Source::Auto)?;
+    // On Windows, when connecting to a TwinCAT instance running on the same
+    // machine, use the following to connect:
+    let client = ads::Client::new(("127.0.0.1", ads::PORT), ads::Timeouts::none(),
+                                  ads::Source::Request)?;
 
     // Specify the target ADS device to talk to, by NetID and AMS port.
     // Port 851 usually refers to the first PLC instance.
