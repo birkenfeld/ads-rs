@@ -1,7 +1,7 @@
 //! Shows how to read a whole structure from the PLC by handle,
 //! by redefining it as a Rust struct with zerocopy traits.
 
-use ads::{Client, Source, Timeouts, symbol::Handle};
+use ads::{symbol::Handle, Client, Source, Timeouts};
 use zerocopy::{FromBytes, IntoBytes};
 
 #[derive(Default, FromBytes, IntoBytes)]
@@ -19,5 +19,10 @@ fn main() {
     let motor = handle.read_value::<Motor>().unwrap();
     let pos = motor.position;
     let spd = motor.speed;
-    println!("Motor params: pos={} spd={} moving={}", pos, spd, motor.moving != 0);
+    println!(
+        "Motor params: pos={} spd={} moving={}",
+        pos,
+        spd,
+        motor.moving != 0
+    );
 }

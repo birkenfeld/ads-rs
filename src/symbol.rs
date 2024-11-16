@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 
-use byteorder::{ByteOrder, LE, ReadBytesExt};
-use zerocopy::{FromBytes, IntoBytes, Immutable};
+use byteorder::{ByteOrder, ReadBytesExt, LE};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-use crate::errors::{Error, ErrContext};
+use crate::errors::{ErrContext, Error};
 use crate::index;
 use crate::{Device, Result};
 
@@ -23,9 +23,16 @@ impl<'c> Handle<'c> {
     /// Create a new handle to a single symbol.
     pub fn new(device: Device<'c>, symbol: &str) -> Result<Self> {
         let mut handle_bytes = [0; 4];
-        device.write_read_exact(index::GET_SYMHANDLE_BYNAME, 0, symbol.as_bytes(),
-                                &mut handle_bytes)?;
-        Ok(Self { device, handle: u32::from_le_bytes(handle_bytes) })
+        device.write_read_exact(
+            index::GET_SYMHANDLE_BYNAME,
+            0,
+            symbol.as_bytes(),
+            &mut handle_bytes,
+        )?;
+        Ok(Self {
+            device,
+            handle: u32::from_le_bytes(handle_bytes),
+        })
     }
 
     /// Return the raw handle.
@@ -35,12 +42,14 @@ impl<'c> Handle<'c> {
 
     /// Read data from the variable (returned data must match size of buffer).
     pub fn read(&self, buf: &mut [u8]) -> Result<()> {
-        self.device.read_exact(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
+        self.device
+            .read_exact(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
     }
 
     /// Write data to the variable.
     pub fn write(&self, buf: &[u8]) -> Result<()> {
-        self.device.write(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
+        self.device
+            .write(index::RW_SYMVAL_BYHANDLE, self.handle, buf)
     }
 
     /// Read data of given type.
@@ -52,21 +61,24 @@ impl<'c> Handle<'c> {
     /// Note: to be independent of the host's byte order, use the integer types
     /// defined in `zerocopy::byteorder`.
     pub fn read_value<T: Default + IntoBytes + FromBytes>(&self) -> Result<T> {
-        self.device.read_value(index::RW_SYMVAL_BYHANDLE, self.handle)
+        self.device
+            .read_value(index::RW_SYMVAL_BYHANDLE, self.handle)
     }
 
     /// Write data of given type.
     ///
     /// See `read_value` for details.
     pub fn write_value<T: IntoBytes + Immutable>(&self, value: &T) -> Result<()> {
-        self.device.write_value(index::RW_SYMVAL_BYHANDLE, self.handle, value)
+        self.device
+            .write_value(index::RW_SYMVAL_BYHANDLE, self.handle, value)
     }
 }
 
 impl Drop for Handle<'_> {
     fn drop(&mut self) {
-        let _ = self.device.write(index::RELEASE_SYMHANDLE, 0,
-                                  &self.handle.to_le_bytes());
+        let _ = self
+            .device
+            .write(index::RELEASE_SYMHANDLE, 0, &self.handle.to_le_bytes());
     }
 }
 
@@ -81,23 +93,24 @@ pub fn get_size(device: Device<'_>, symbol: &str) -> Result<usize> {
 pub fn get_location(device: Device<'_>, symbol: &str) -> Result<(u32, u32)> {
     let mut buf = [0; 12];
     device.write_read_exact(index::GET_SYMINFO_BYNAME, 0, symbol.as_bytes(), &mut buf)?;
-    Ok((u32::from_le_bytes(buf[0..4].try_into().expect("size")),
-        u32::from_le_bytes(buf[4..8].try_into().expect("size"))))
+    Ok((
+        u32::from_le_bytes(buf[0..4].try_into().expect("size")),
+        u32::from_le_bytes(buf[4..8].try_into().expect("size")),
+    ))
 }
-
 
 /// Represents a symbol in the PLC memory.
 pub struct Symbol {
     /// Hierarchical name of the symbol.
-    pub name:      String,
+    pub name: String,
     /// Index group of the symbol location.
-    pub ix_group:  u32,
+    pub ix_group: u32,
     /// Index offset of the symbol location.
     pub ix_offset: u32,
     /// Type name of the symbol.
-    pub typ:       String,
+    pub typ: String,
     /// Total size of the symbol, in bytes.
-    pub size:      usize,
+    pub size: usize,
     /// Base type:
     /// - 0 - void
     /// - 2 - INT (i16)
@@ -130,19 +143,19 @@ pub struct Symbol {
     /// - 0x2000 - Static
     /// - 0x4000 - Init on reset
     /// - 0x8000 - Extended flags present
-    pub flags:     u32,
+    pub flags: u32,
 }
 
 /// Represents a type in the PLC's type inventory.
 pub struct Type {
     /// Name of the type.
-    pub name:      String,
+    pub name: String,
     /// Total size of the type, in bytes.
-    pub size:      usize,
+    pub size: usize,
     /// If the type is an array, (lower, upper) index bounds for all dimensions.
-    pub array:     Vec<(i32, i32)>,
+    pub array: Vec<(i32, i32)>,
     /// If the type is a struct, all fields it contains.
-    pub fields:    Vec<Field>,
+    pub fields: Vec<Field>,
     /// Base type (see [`Symbol::base_type`]).
     pub base_type: u32,
     /// Type flags:
@@ -169,26 +182,26 @@ pub struct Type {
     /// - 0x400000 - Init on reset
     /// - 0x800000 - Is/Contains PLC pointer type
     /// - 0x01000000 - Refactor infos present
-    pub flags:     u32,
+    pub flags: u32,
 }
 
 /// Represents a field of a structure type.
 pub struct Field {
     /// Name of the field.
-    pub name:      String,
+    pub name: String,
     /// Type name of the field.
-    pub typ:       String,
+    pub typ: String,
     /// Offset of the field in the structure.  If `None`, the field is defined
     /// in some other memory block and not inline to the structure.
-    pub offset:    Option<u32>,
+    pub offset: Option<u32>,
     /// Size of the field, in bytes.
-    pub size:      usize,
+    pub size: usize,
     /// If the field is an array, (lower, upper) index bounds for all dimensions.
-    pub array:     Vec<(i32, i32)>,
+    pub array: Vec<(i32, i32)>,
     /// Base type (see [`Symbol::base_type`]).
     pub base_type: u32,
     /// Type flags (see [`Type::flags`]).
-    pub flags:     u32,
+    pub flags: u32,
 }
 
 /// A mapping from type name to type.
@@ -200,7 +213,7 @@ pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
     let mut read_data = [0; 64];
     device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
-    let types_len  = LE::read_u32(&read_data[12..]) as usize;
+    let types_len = LE::read_u32(&read_data[12..]) as usize;
 
     // Query the type info.
     let mut type_data = vec![0; types_len];
@@ -219,7 +232,10 @@ pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
 /// respectively.
 ///
 /// Returns a list of symbols, and a map of type names to types.
-pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(Vec<Symbol>, TypeMap)> {
+pub fn decode_symbol_info(
+    symbol_data: Vec<u8>,
+    type_data: Vec<u8>,
+) -> Result<(Vec<Symbol>, TypeMap)> {
     // Decode the type info.
     let mut buf = [0; 1024];
     let mut data_ptr = type_data.as_slice();
@@ -262,12 +278,31 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
             assert_eq!(sub_items, 0);
             // Offset -1 marks that the field is placed somewhere else in memory
             // (e.g. AT %Mxx).
-            let offset = if offset == 0xFFFF_FFFF { None } else { Some(offset) };
-            parent.fields.push(Field { name, typ, offset, size, array, base_type, flags });
+            let offset = if offset == 0xFFFF_FFFF {
+                None
+            } else {
+                Some(offset)
+            };
+            parent.fields.push(Field {
+                name,
+                typ,
+                offset,
+                size,
+                array,
+                base_type,
+                flags,
+            });
             Ok(None)
         } else {
             assert_eq!(offset, 0);
-            let mut typinfo = Type { name, size, array, base_type, flags, fields: Vec::new() };
+            let mut typinfo = Type {
+                name,
+                size,
+                array,
+                base_type,
+                flags,
+                fields: Vec::new(),
+            };
 
             for _ in 0..sub_items {
                 let sub_size = ptr.read_u32::<LE>().ctx(ctx)? as usize;
@@ -290,8 +325,7 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
     }
 
     while !data_ptr.is_empty() {
-        let entry_size = data_ptr.read_u32::<LE>()
-            .ctx("decoding type info")? as usize;
+        let entry_size = data_ptr.read_u32::<LE>().ctx("decoding type info")? as usize;
         let (entry_ptr, rest) = data_ptr.split_at(entry_size - 4);
         let typ = decode_type_info(entry_ptr, None)?.expect("base type");
         type_map.insert(typ.name.clone(), typ);
@@ -325,7 +359,15 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
         // - flags2 if flags has Extended flags
         // - if flags2 has Old names
 
-        symbols.push(Symbol { name, ix_group, ix_offset, typ, size, base_type, flags });
+        symbols.push(Symbol {
+            name,
+            ix_group,
+            ix_offset,
+            typ,
+            size,
+            base_type,
+            flags,
+        });
 
         data_ptr = rest;
     }

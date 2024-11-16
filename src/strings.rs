@@ -1,6 +1,6 @@
 //! Const-generic string types for representing fixed-length strings.
 
-use zerocopy::{FromBytes, IntoBytes, Immutable};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 /// Represents a fixed-length byte string.
 ///
@@ -13,7 +13,7 @@ use zerocopy::{FromBytes, IntoBytes, Immutable};
 /// It can be converted to a Rust `String` if it is UTF8 encoded.
 #[repr(C)]
 #[derive(Clone, Copy, FromBytes, IntoBytes, Immutable)]
-pub struct String<const LEN: usize>([u8; LEN], u8);  // one extra NULL byte
+pub struct String<const LEN: usize>([u8; LEN], u8); // one extra NULL byte
 
 impl<const LEN: usize> String<LEN> {
     /// Create a new empty string.
@@ -124,7 +124,6 @@ impl<const LEN: usize> std::convert::TryFrom<String<LEN>> for std::string::Strin
     }
 }
 
-
 /// Represents a fixed-length wide string.
 ///
 /// This type can be created from a `&[u16]` if its length does not
@@ -139,7 +138,7 @@ impl<const LEN: usize> std::convert::TryFrom<String<LEN>> for std::string::Strin
 #[repr(C)]
 // NOTE: can't derive IntoBytes automatically until zerocopy #10 is fixed.
 #[derive(Clone, Copy, FromBytes, Immutable)]
-pub struct WString<const LEN: usize, const LEN2: usize=1>([u16; LEN], u16);  // one extra NULL byte
+pub struct WString<const LEN: usize, const LEN2: usize = 1>([u16; LEN], u16); // one extra NULL byte
 
 impl<const LEN: usize> WString<LEN> {
     /// Create a new empty string.
@@ -179,8 +178,8 @@ impl<const LEN: usize> std::fmt::Debug for WString<LEN> {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
         let fmted: std::string::String =
             std::char::decode_utf16(self.0.iter().cloned().take_while(|&b| b != 0))
-            .map(|ch| ch.unwrap_or(std::char::REPLACEMENT_CHARACTER))
-            .collect();
+                .map(|ch| ch.unwrap_or(std::char::REPLACEMENT_CHARACTER))
+                .collect();
         std::fmt::Debug::fmt(&fmted, fmt)
     }
 }
@@ -265,7 +264,7 @@ impl<const LEN: usize> std::convert::TryFrom<WString<LEN>> for std::string::Stri
 // SAFETY: the layout of WString consists of only u16 elements; no padding is inserted
 // between them.
 unsafe impl<const LEN: usize> zerocopy::IntoBytes for WString<LEN> {
-    fn only_derive_is_allowed_to_implement_this_trait() { }
+    fn only_derive_is_allowed_to_implement_this_trait() {}
 }
 
 // compatibility aliases

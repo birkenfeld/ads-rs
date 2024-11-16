@@ -7,7 +7,7 @@ use std::{char, iter, str};
 
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use zerocopy::byteorder::little_endian::{U16, U32};
-use zerocopy::{IntoBytes, FromBytes, Immutable};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::errors::ErrContext;
 use crate::{AmsAddr, AmsNetId, Error, Result};
@@ -52,15 +52,18 @@ impl Message {
     /// Create a new UDP message backed by a byte vector.
     pub fn new(service: ServiceId, source: AmsAddr) -> Self {
         let header = UdpHeader {
-            magic:     U32::new(BECKHOFF_UDP_MAGIC),
+            magic: U32::new(BECKHOFF_UDP_MAGIC),
             invoke_id: U32::new(0),
-            service:   U32::new(service as u32),
+            service: U32::new(service as u32),
             src_netid: source.netid(),
-            src_port:  U16::new(source.port()),
-            num_items: U32::new(0),  // will be adapted later
+            src_port: U16::new(source.port()),
+            num_items: U32::new(0), // will be adapted later
         };
         let data = header.as_bytes().to_vec();
-        Self { items: Vec::with_capacity(8), data }
+        Self {
+            items: Vec::with_capacity(8),
+            data,
+        }
     }
 
     #[cfg(test)]
@@ -83,11 +86,20 @@ impl Message {
         if magic != BECKHOFF_UDP_MAGIC {
             return Err(Error::Reply("parsing UDP packet", "invalid magic", magic));
         }
-        if invoke_id != 0 {  // we're only generating 0
-            return Err(Error::Reply("parsing UDP packet", "invalid invoke ID", invoke_id));
+        if invoke_id != 0 {
+            // we're only generating 0
+            return Err(Error::Reply(
+                "parsing UDP packet",
+                "invalid invoke ID",
+                invoke_id,
+            ));
         }
         if rep_service != exp_service {
-            return Err(Error::Reply("parsing UDP packet", "invalid service ID", rep_service));
+            return Err(Error::Reply(
+                "parsing UDP packet",
+                "invalid service ID",
+                rep_service,
+            ));
         }
         let _src = AmsAddr::read_from(&mut data_ptr).ctx("parsing UDP packet")?;
         let nitems = data_ptr.read_u32::<LE>().ctx("parsing UDP packet")?;
@@ -102,7 +114,10 @@ impl Message {
                 data_ptr = &data_ptr[len..];
             }
         }
-        Ok(Self { data: data.to_vec(), items })
+        Ok(Self {
+            data: data.to_vec(),
+            items,
+        })
     }
 
     /// Add a tag containing arbitrary bytes.
@@ -120,7 +135,9 @@ impl Message {
         self.data.write_u16::<LE>(tag as u16).expect("vec");
         let start = self.data.len();
         // add the null terminator
-        self.data.write_u16::<LE>(data.len() as u16 + 1).expect("vec");
+        self.data
+            .write_u16::<LE>(data.len() as u16 + 1)
+            .expect("vec");
         self.data.write_all(data.as_bytes()).expect("vec");
         self.data.write_u8(0).expect("vec");
         self.items.push((tag as u16, start, self.data.len()));
@@ -138,10 +155,13 @@ impl Message {
     }
 
     fn map_tag<'a, O, F>(&'a self, tag: Tag, map: F) -> Option<O>
-        where F: Fn(&'a [u8]) -> Option<O>
+    where
+        F: Fn(&'a [u8]) -> Option<O>,
     {
-        self.items.iter().find(|item| item.0 == tag as u16)
-                         .and_then(|&(_, i, j)| map(&self.data[i..j]))
+        self.items
+            .iter()
+            .find(|item| item.0 == tag as u16)
+            .and_then(|&(_, i, j)| map(&self.data[i..j]))
     }
 
     /// Get the data for given tag as bytes.
@@ -174,7 +194,8 @@ impl Message {
     pub fn send_receive(&self, to: impl ToSocketAddrs) -> Result<Self> {
         // Send self as a request.
         let sock = UdpSocket::bind("0.0.0.0:0").ctx("binding UDP socket")?;
-        sock.send_to(self.as_bytes(), to).ctx("sending UDP request")?;
+        sock.send_to(self.as_bytes(), to)
+            .ctx("sending UDP request")?;
 
         // Receive the reply.
         let mut reply = [0; 576];
@@ -198,9 +219,15 @@ impl Message {
 /// - `username`: system username for the router, default is `Administrator`
 /// - `password`: system password for the given user, default is `1`
 /// - `temporary`: marks the route as "temporary"
-pub fn add_route(target: (&str, u16), netid: AmsNetId, host: &str,
-                 routename: Option<&str>, username: Option<&str>,
-                 password: Option<&str>, temporary: bool) -> Result<()> {
+pub fn add_route(
+    target: (&str, u16),
+    netid: AmsNetId,
+    host: &str,
+    routename: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
+    temporary: bool,
+) -> Result<()> {
     let mut packet = Message::new(ServiceId::AddRoute, AmsAddr::new(netid, 0));
     packet.add_bytes(Tag::NetID, &netid.0);
     packet.add_str(Tag::ComputerName, host);
@@ -273,11 +300,16 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
                 _ => "Unknown platform",
             };
             let string = if platform == "TC/RTOS" {
-                bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
+                bytes
+                    .iter()
+                    .take_while(|&&b| b != 0)
+                    .map(|&b| b as char)
+                    .collect()
             } else {
                 iter::from_fn(|| bytes.read_u16::<LE>().ok())
                     .take_while(|&ch| ch != 0)
-                    .filter_map(|ch| char::from_u32(ch as u32)).collect()
+                    .filter_map(|ch| char::from_u32(ch as u32))
+                    .collect()
             };
             (platform, major, minor, build, string)
         } else {
@@ -298,10 +330,10 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
 #[derive(FromBytes, IntoBytes, Immutable, Default)]
 #[repr(C)]
 pub(crate) struct UdpHeader {
-    magic:     U32,
+    magic: U32,
     invoke_id: U32,
-    service:   U32,
+    service: U32,
     src_netid: AmsNetId,
-    src_port:  U16,
+    src_port: U16,
     num_items: U32,
 }

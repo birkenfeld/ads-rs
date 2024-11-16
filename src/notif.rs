@@ -26,9 +26,18 @@ pub struct Attributes {
 
 impl Attributes {
     /// Return new notification attributes.
-    pub fn new(length: usize, trans_mode: TransmissionMode,
-               max_delay: Duration, cycle_time: Duration) -> Self {
-        Self { length, trans_mode, max_delay, cycle_time }
+    pub fn new(
+        length: usize,
+        trans_mode: TransmissionMode,
+        max_delay: Duration,
+        cycle_time: Duration,
+    ) -> Self {
+        Self {
+            length,
+            trans_mode,
+            max_delay,
+            cycle_time,
+        }
     }
 }
 
@@ -71,9 +80,12 @@ impl Notification {
     pub fn new(data: impl Into<Vec<u8>>) -> Result<Self> {
         // Relevant data starts at byte 42 with the number of stamps.
         let data = data.into();
-        if data.len() < AMS_HEADER_SIZE + 8 {  // header + length + #stamps
-            return Err(Error::Io("parsing notification",
-                                 io::ErrorKind::UnexpectedEof.into()));
+        if data.len() < AMS_HEADER_SIZE + 8 {
+            // header + length + #stamps
+            return Err(Error::Io(
+                "parsing notification",
+                io::ErrorKind::UnexpectedEof.into(),
+            ));
         }
         let mut ptr = &data[AMS_HEADER_SIZE + 4..];
         let nstamps = ptr.read_u32::<LE>().ctx("parsing notification")?;
@@ -87,23 +99,31 @@ impl Notification {
                 if ptr.len() >= length {
                     ptr = &ptr[length..];
                 } else {
-                    return Err(Error::Io("parsing notification",
-                                         io::ErrorKind::UnexpectedEof.into()));
+                    return Err(Error::Io(
+                        "parsing notification",
+                        io::ErrorKind::UnexpectedEof.into(),
+                    ));
                 }
             }
         }
         if ptr.is_empty() {
             Ok(Self { data, nstamps })
         } else {
-            Err(Error::Io("parsing notification",
-                          io::ErrorKind::UnexpectedEof.into()))
+            Err(Error::Io(
+                "parsing notification",
+                io::ErrorKind::UnexpectedEof.into(),
+            ))
         }
     }
 
     /// Return an iterator over all data samples in this notification.
     pub fn samples(&self) -> SampleIter<'_> {
-        SampleIter { data: &self.data[46..], cur_timestamp: 0,
-                     stamps_left: self.nstamps, samples_left: 0 }
+        SampleIter {
+            data: &self.data[46..],
+            cur_timestamp: 0,
+            stamps_left: self.nstamps,
+            samples_left: 0,
+        }
     }
 }
 
@@ -137,7 +157,11 @@ impl<'a> Iterator for SampleIter<'a> {
             let (data, rest) = self.data.split_at(length);
             self.data = rest;
             self.samples_left -= 1;
-            Some(Sample { handle, data, timestamp: self.cur_timestamp })
+            Some(Sample {
+                handle,
+                data,
+                timestamp: self.cur_timestamp,
+            })
         } else if self.stamps_left > 0 {
             // Go to next stamp.
             self.cur_timestamp = self.data.read_u64::<LE>().expect("size");
