@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 
-use byteorder::{ByteOrder, LE, ReadBytesExt};
-use zerocopy::{FromBytes, IntoBytes, Immutable};
+use byteorder::{ByteOrder, ReadBytesExt, LE};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-use crate::errors::{Error, ErrContext};
+use crate::errors::{ErrContext, Error};
 use crate::index;
 use crate::{Device, Result};
 

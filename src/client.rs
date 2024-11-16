@@ -18,7 +18,7 @@ use crate::notif;
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
 use zerocopy::byteorder::little_endian::{U16, U32};
-use zerocopy::{IntoBytes, FromBytes, FromZeros, Immutable};
+use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096

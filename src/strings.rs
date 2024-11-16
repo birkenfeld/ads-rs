@@ -1,6 +1,6 @@
 //! Const-generic string types for representing fixed-length strings.
 
-use zerocopy::{FromBytes, IntoBytes, Immutable};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 /// Represents a fixed-length byte string.
 ///

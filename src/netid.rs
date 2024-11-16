@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
-use zerocopy::{IntoBytes, FromBytes, Immutable};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 /// Represents an AMS NetID.
 ///

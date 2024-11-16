@@ -7,7 +7,7 @@ use std::{char, iter, str};
 
 use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use zerocopy::byteorder::little_endian::{U16, U32};
-use zerocopy::{IntoBytes, FromBytes, Immutable};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::errors::ErrContext;
 use crate::{AmsAddr, AmsNetId, Error, Result};

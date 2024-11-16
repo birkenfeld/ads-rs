@@ -2,9 +2,9 @@
 
 use std::io;
 
-use byteorder::{ByteOrder, LE};
 use crate::index;
 use crate::{Device, Error, Result};
+use byteorder::{ByteOrder, LE};
 
 /// A file opened within the PLC.  Files implement `Read` and `Write`, so they
 /// can be used like normal files in Rust APIs.

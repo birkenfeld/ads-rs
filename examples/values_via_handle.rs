@@ -1,7 +1,7 @@
 //! Shows how to read a whole structure from the PLC by handle,
 //! by redefining it as a Rust struct with zerocopy traits.
 
-use ads::{Client, Source, Timeouts, symbol::Handle};
+use ads::{symbol::Handle, Client, Source, Timeouts};
 use zerocopy::{FromBytes, IntoBytes};
 
 #[derive(Default, FromBytes, IntoBytes)]

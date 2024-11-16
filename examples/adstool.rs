@@ -4,13 +4,13 @@ use std::convert::TryInto;
 use std::io::{stdin, stdout, Read, Write};
 use std::str::FromStr;
 
-use byteorder::{ByteOrder, BE, LE, WriteBytesExt};
+use byteorder::{ByteOrder, WriteBytesExt, BE, LE};
+use chrono::{DateTime, Utc};
+use clap::{AppSettings, ArgGroup, Parser, Subcommand};
 use itertools::Itertools;
 use parse_int::parse;
-use clap::{Parser, Subcommand, ArgGroup, AppSettings};
-use strum::EnumString;
 use quick_xml::{events::Event, name::QName};
-use chrono::{DateTime, Utc};
+use strum::EnumString;
 
 #[derive(Parser, Debug)]
 #[clap(disable_help_subcommand = true)]

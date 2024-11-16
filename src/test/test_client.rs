@@ -86,8 +86,8 @@ fn test_readwrite() {
 
 #[test]
 fn test_multi_requests() {
-    use crate::index::*;
     use crate::client::*;
+    use crate::index::*;
     run_test(ServerOpts::default(), |device| {
         let mut buf1 = *b"ABCDEFGHIJ";
         let mut buf2 = *b"0123456789";

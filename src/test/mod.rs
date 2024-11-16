@@ -12,7 +12,7 @@ use byteorder::{ByteOrder, ReadBytesExt, WriteBytesExt, LE};
 use once_cell::sync::Lazy;
 use zerocopy::{
     byteorder::little_endian::{U32, U64},
-    FromBytes, FromZeros, IntoBytes, Immutable
+    FromBytes, FromZeros, Immutable, IntoBytes,
 };
 
 use crate::client::{AddNotif, AdsHeader, IndexLength, IndexLengthRW};
