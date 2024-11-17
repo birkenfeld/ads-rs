@@ -68,7 +68,6 @@ pub const ADS_ERRORS: &[(u32, &str)] = &[
     (0x01C, "Invalid AMS fragment"),
     (0x01D, "TLS send error - secure ADS connection failed"),
     (0x01E, "Access denied - secure ADS access denied"),
-
     (0x500, "Router: no locked memory"),
     (0x501, "Router: memory size could not be changed"),
     (0x502, "Router: mailbox full"),
@@ -83,7 +82,6 @@ pub const ADS_ERRORS: &[(u32, &str)] = &[
     (0x50B, "Router: mailbox full for fragmented messages"),
     (0x50C, "Router: fragment timeout occurred"),
     (0x50D, "Router: port removed"),
-
     (0x700, "General device error"),
     (0x701, "Service is not supported by server"),
     (0x702, "Invalid index group"),
@@ -142,7 +140,6 @@ pub const ADS_ERRORS: &[(u32, &str)] = &[
     (0x737, "Context - forward to passive level"),
     (0x738, "Content - forward to dispatch level"),
     (0x739, "Context - forward to real-time"),
-
     (0x740, "General client error"),
     (0x741, "Invalid parameter at service"),
     (0x742, "Polling list is empty"),
@@ -159,7 +156,6 @@ pub const ADS_ERRORS: &[(u32, &str)] = &[
     (0x753, "No more symbols in cache"),
     (0x754, "Invalid response received"),
     (0x755, "Sync port is locked"),
-
     (0x1000, "Internal error in real-time system"),
     (0x1001, "Timer value not valid"),
     (0x1002, "Task pointer has invalid value 0"),

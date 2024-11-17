@@ -52,12 +52,12 @@ impl Message {
     /// Create a new UDP message backed by a byte vector.
     pub fn new(service: ServiceId, source: AmsAddr) -> Self {
         let header = UdpHeader {
-            magic:     U32::new(BECKHOFF_UDP_MAGIC),
+            magic: U32::new(BECKHOFF_UDP_MAGIC),
             invoke_id: U32::new(0),
-            service:   U32::new(service as u32),
+            service: U32::new(service as u32),
             src_netid: source.netid(),
-            src_port:  U16::new(source.port()),
-            num_items: U32::new(0),  // will be adapted later
+            src_port: U16::new(source.port()),
+            num_items: U32::new(0), // will be adapted later
         };
         let data = header.as_bytes().to_vec();
         Self { items: Vec::with_capacity(8), data }
@@ -83,7 +83,8 @@ impl Message {
         if magic != BECKHOFF_UDP_MAGIC {
             return Err(Error::Reply("parsing UDP packet", "invalid magic", magic));
         }
-        if invoke_id != 0 {  // we're only generating 0
+        if invoke_id != 0 {
+            // we're only generating 0
             return Err(Error::Reply("parsing UDP packet", "invalid invoke ID", invoke_id));
         }
         if rep_service != exp_service {
@@ -138,10 +139,13 @@ impl Message {
     }
 
     fn map_tag<'a, O, F>(&'a self, tag: Tag, map: F) -> Option<O>
-        where F: Fn(&'a [u8]) -> Option<O>
+    where
+        F: Fn(&'a [u8]) -> Option<O>,
     {
-        self.items.iter().find(|item| item.0 == tag as u16)
-                         .and_then(|&(_, i, j)| map(&self.data[i..j]))
+        self.items
+            .iter()
+            .find(|item| item.0 == tag as u16)
+            .and_then(|&(_, i, j)| map(&self.data[i..j]))
     }
 
     /// Get the data for given tag as bytes.
@@ -198,9 +202,10 @@ impl Message {
 /// - `username`: system username for the router, default is `Administrator`
 /// - `password`: system password for the given user, default is `1`
 /// - `temporary`: marks the route as "temporary"
-pub fn add_route(target: (&str, u16), netid: AmsNetId, host: &str,
-                 routename: Option<&str>, username: Option<&str>,
-                 password: Option<&str>, temporary: bool) -> Result<()> {
+pub fn add_route(
+    target: (&str, u16), netid: AmsNetId, host: &str, routename: Option<&str>, username: Option<&str>,
+    password: Option<&str>, temporary: bool,
+) -> Result<()> {
     let mut packet = Message::new(ServiceId::AddRoute, AmsAddr::new(netid, 0));
     packet.add_bytes(Tag::NetID, &netid.0);
     packet.add_str(Tag::ComputerName, host);
@@ -277,7 +282,8 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             } else {
                 iter::from_fn(|| bytes.read_u16::<LE>().ok())
                     .take_while(|&ch| ch != 0)
-                    .filter_map(|ch| char::from_u32(ch as u32)).collect()
+                    .filter_map(|ch| char::from_u32(ch as u32))
+                    .collect()
             };
             (platform, major, minor, build, string)
         } else {
@@ -298,10 +304,10 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
 #[derive(FromBytes, IntoBytes, Immutable, Default)]
 #[repr(C)]
 pub(crate) struct UdpHeader {
-    magic:     U32,
+    magic: U32,
     invoke_id: U32,
-    service:   U32,
+    service: U32,
     src_netid: AmsNetId,
-    src_port:  U16,
+    src_port: U16,
     num_items: U32,
 }

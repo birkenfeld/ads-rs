@@ -20,26 +20,22 @@ impl<'c> File<'c> {
     pub fn open(device: Device<'c>, filename: impl AsRef<[u8]>, flags: u32) -> Result<Self> {
         let mut hdl = [0; 4];
         device.write_read_exact(index::FILE_OPEN, flags, filename.as_ref(), &mut hdl)?;
-        Ok(File {
-            device,
-            handle: u32::from_le_bytes(hdl),
-        })
+        Ok(File { device, handle: u32::from_le_bytes(hdl) })
     }
 
     /// Delete a file.  `flags` must be combined from the constants in this module.
     pub fn delete(device: Device, filename: impl AsRef<[u8]>, flags: u32) -> Result<()> {
-        device.write_read(index::FILE_DELETE, flags, filename.as_ref(), &mut []).map(drop)
+        device
+            .write_read(index::FILE_DELETE, flags, filename.as_ref(), &mut [])
+            .map(drop)
     }
-
 }
 
 /// Return a list of files in the named directory.
 ///
 /// Returned tuples are (name, attributes, size).  Returned filenames are not String
 /// since they are likely encoded in Windows-1252.
-pub fn listdir(device: Device, dirname: impl AsRef<[u8]>)
-     -> Result<Vec<(Vec<u8>, u32, u64)>>
-{
+pub fn listdir(device: Device, dirname: impl AsRef<[u8]>) -> Result<Vec<(Vec<u8>, u32, u64)>> {
     let mut files = Vec::new();
     let mut buf = [0; 324];
     // Initial offset.  Offset 4 would start at the TwinCAT Boot directory instead.
@@ -69,11 +65,12 @@ pub fn listdir(device: Device, dirname: impl AsRef<[u8]>)
 
 impl io::Write for File<'_> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.device.write_read(index::FILE_WRITE, self.handle, data, &mut [])
-                   // need to convert errors back to io::Error
-                   .map_err(map_error)
-                   // no info about written length is returned
-                   .map(|_| data.len())
+        self.device
+            .write_read(index::FILE_WRITE, self.handle, data, &mut [])
+            // need to convert errors back to io::Error
+            .map_err(map_error)
+            // no info about written length is returned
+            .map(|_| data.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -83,7 +80,9 @@ impl io::Write for File<'_> {
 
 impl std::io::Read for File<'_> {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
-        self.device.write_read(index::FILE_READ, self.handle, &[], data).map_err(map_error)
+        self.device
+            .write_read(index::FILE_READ, self.handle, &[], data)
+            .map_err(map_error)
     }
 }
 
@@ -123,7 +122,6 @@ pub const ENABLE_DIR: u32 = 1 << 7;
 pub const OVERWRITE: u32 = 1 << 8;
 /// Unknown.
 pub const OVERWRITE_RENAME: u32 = 1 << 9;
-
 
 /// File attribute bit for directories.
 pub const DIRECTORY: u32 = 0x10;

@@ -19,8 +19,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 /// Although often the first 4 bytes of a NetID look like an IP address, and
 /// sometimes even are identical to the device's IP address, there is no
 /// requirement for this, and one should never rely on it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug,
-         FromBytes, IntoBytes, Immutable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug, FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
 pub struct AmsNetId(pub [u8; 6]);
 
@@ -126,8 +125,7 @@ impl FromStr for AmsAddr {
 
     /// Parse an AMS address from a string (netid:port).
     fn from_str(s: &str) -> Result<AmsAddr, &'static str> {
-        let (addr, port) = s.split(':').collect_tuple()
-                                       .ok_or("invalid AMS addr string")?;
+        let (addr, port) = s.split(':').collect_tuple().ok_or("invalid AMS addr string")?;
         Ok(Self(addr.parse()?, port.parse().map_err(|_| "invalid port number")?))
     }
 }

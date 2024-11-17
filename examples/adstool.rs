@@ -242,7 +242,7 @@ enum VarAction {
         /// the variable type
         #[clap(long)]
         r#type: Option<VarType>,
-    }
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -278,13 +278,10 @@ enum VarType {
 impl VarType {
     fn size(&self) -> usize {
         match self {
-            VarType::Bool |
-            VarType::Byte | VarType::Sint   => 1,
-            VarType::Word | VarType::Int    => 2,
-            VarType::Real |
-            VarType::Dword | VarType::Dint  => 4,
-            VarType::Lreal |
-            VarType::Lword | VarType::Lint  => 8,
+            VarType::Bool | VarType::Byte | VarType::Sint => 1,
+            VarType::Word | VarType::Int => 2,
+            VarType::Real | VarType::Dword | VarType::Dint => 4,
+            VarType::Lreal | VarType::Lword | VarType::Lint => 8,
             VarType::String => 255,
         }
     }
@@ -313,7 +310,7 @@ impl FromStr for Target {
                 port: cap.name("port").map(|p| p.as_str().parse().expect("from rx")),
                 netid: cap.name("netid").map(|p| p.as_str().parse()).transpose()?,
                 amsport: cap.name("amsport").map(|p| p.as_str().parse().expect("from rx")),
-            })
+            }),
         }
     }
 }
@@ -337,7 +334,9 @@ enum Error {
     Str(String),
 }
 
-fn connect(target: Target, autoroute: bool, defport: ads::AmsPort) -> ads::Result<(ads::Client, ads::AmsAddr)> {
+fn connect(
+    target: Target, autoroute: bool, defport: ads::AmsPort,
+) -> ads::Result<(ads::Client, ads::AmsAddr)> {
     let target_netid = match target.netid {
         Some(netid) => netid,
         None => ads::udp::get_netid((target.host.as_str(), ads::UDP_PORT))?,
@@ -356,9 +355,15 @@ fn connect(target: Target, autoroute: bool, defport: ads::AmsPort) -> ads::Resul
             println!("Device info failed, trying to set a route...");
             let ip = client.source().netid().0;
             let ip = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-            ads::udp::add_route((target.host.as_str(), ads::UDP_PORT),
-                                client.source().netid(), &ip, None,
-                                None, None, true)?;
+            ads::udp::add_route(
+                (target.host.as_str(), ads::UDP_PORT),
+                client.source().netid(),
+                &ip,
+                None,
+                None,
+                None,
+                true,
+            )?;
             return connect(target, false, defport);
         }
     }
@@ -369,10 +374,15 @@ fn main_inner(args: Args) -> Result<(), Error> {
     let udp_addr = (args.target.host.as_str(), args.target.port.unwrap_or(ads::UDP_PORT));
     match args.cmd {
         Cmd::Route(RouteAction::Add(subargs)) => {
-            ads::udp::add_route(udp_addr, subargs.netid, &subargs.addr,
-                                subargs.routename.as_deref(),
-                                Some(&subargs.username), Some(&subargs.password),
-                                subargs.temporary)?;
+            ads::udp::add_route(
+                udp_addr,
+                subargs.netid,
+                &subargs.addr,
+                subargs.routename.as_deref(),
+                Some(&subargs.username),
+                Some(&subargs.password),
+                subargs.temporary,
+            )?;
             println!("Success.");
         }
         Cmd::Route(RouteAction::List) => {
@@ -391,12 +401,18 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         let _max_frag = LE::read_u32(&routeinfo[16..]);
                         let hostlen = LE::read_u32(&routeinfo[32..]) as usize;
                         let namelen = LE::read_u32(&routeinfo[36..]) as usize;
-                        let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen-1]);
-                        let name = String::from_utf8_lossy(&routeinfo[44+hostlen..][..namelen-1]);
+                        let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen - 1]);
+                        let name = String::from_utf8_lossy(&routeinfo[44 + hostlen..][..namelen - 1]);
                         print!("{:-20} {:-22} {:-18}", name, netid, host);
-                        if flags & 0x01 != 0 { print!(" temporary"); }
-                        if flags & 0x80 != 0 { print!(" unidirectional"); }
-                        if flags & 0x100 != 0 { print!(" virtual/nat"); }
+                        if flags & 0x01 != 0 {
+                            print!(" temporary");
+                        }
+                        if flags & 0x80 != 0 {
+                            print!(" unidirectional");
+                        }
+                        if flags & 0x100 != 0 {
+                            print!(" virtual/nat");
+                        }
                         println!();
                     }
                     _ => println!("Route entry {} too short", subindex),
@@ -407,11 +423,14 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let info = ads::udp::get_info(udp_addr)?;
             println!("NetID: {}", info.netid);
             println!("Hostname: {}", info.hostname);
-            println!("TwinCAT version: {}.{}.{}",
-                     info.twincat_version.0, info.twincat_version.1, info.twincat_version.2);
-            println!("OS version: {} {}.{}.{} {}",
-                     info.os_version.0, info.os_version.1, info.os_version.2,
-                     info.os_version.3, info.os_version.4);
+            println!(
+                "TwinCAT version: {}.{}.{}",
+                info.twincat_version.0, info.twincat_version.1, info.twincat_version.2
+            );
+            println!(
+                "OS version: {} {}.{}.{} {}",
+                info.os_version.0, info.os_version.1, info.os_version.2, info.os_version.3, info.os_version.4
+            );
             if !info.fingerprint.is_empty() {
                 println!("Fingerprint: {}", info.fingerprint);
             }
@@ -426,23 +445,29 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let mut stack = Vec::new();
             loop {
                 match rdr.read_event() {
-                    Ok(Event::Start(el)) => if el.name() != QName(b"TcTargetDesc") {
-                        stack.push(String::from_utf8_lossy(el.name().0).to_string());
+                    Ok(Event::Start(el)) => {
+                        if el.name() != QName(b"TcTargetDesc") {
+                            stack.push(String::from_utf8_lossy(el.name().0).to_string());
+                        }
                     }
-                    Ok(Event::End(_)) => { let _ = stack.pop(); }
-                    Ok(Event::Text(t)) => if !stack.is_empty() {
-                        println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(&t));
+                    Ok(Event::End(_)) => {
+                        let _ = stack.pop();
+                    }
+                    Ok(Event::Text(t)) => {
+                        if !stack.is_empty() {
+                            println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(&t));
+                        }
                     }
                     Ok(Event::Eof) => break,
                     Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),
-                    _ => ()
+                    _ => (),
                 }
             }
             println!();
             let n = dev.read(ads::index::TARGET_DESC, 4, &mut xml)?;
-            println!("Platform: {}", String::from_utf8_lossy(&xml[..n-1]));
+            println!("Platform: {}", String::from_utf8_lossy(&xml[..n - 1]));
             let n = dev.read(ads::index::TARGET_DESC, 7, &mut xml)?;
-            println!("Project name: {}", String::from_utf8_lossy(&xml[..n-1]));
+            println!("Project name: {}", String::from_utf8_lossy(&xml[..n - 1]));
         }
         Cmd::File(subargs) => {
             use ads::file;
@@ -452,20 +477,23 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 FileAction::List { path } => {
                     let entries = file::listdir(dev, path)?;
                     for (name, attr, size) in entries {
-                        println!("{} {:8} {}",
-                                 if attr & file::DIRECTORY != 0 { "D" } else { " " },
-                                 size, String::from_utf8_lossy(&name));
+                        println!(
+                            "{} {:8} {}",
+                            if attr & file::DIRECTORY != 0 { "D" } else { " " },
+                            size,
+                            String::from_utf8_lossy(&name)
+                        );
                     }
                 }
                 FileAction::Read { path } => {
-                    let mut file = file::File::open(dev, &path,
-                                                    file::READ | file::BINARY | file::ENSURE_DIR)?;
+                    let mut file =
+                        file::File::open(dev, &path, file::READ | file::BINARY | file::ENSURE_DIR)?;
                     std::io::copy(&mut file, &mut stdout())?;
                 }
                 FileAction::Write { path, append } => {
                     let flag = if append { ads::file::APPEND } else { ads::file::WRITE };
-                    let mut file = file::File::open(dev, &path,
-                                                    flag | file::BINARY | file::PLUS | file::ENSURE_DIR)?;
+                    let mut file =
+                        file::File::open(dev, &path, flag | file::BINARY | file::PLUS | file::ENSURE_DIR)?;
                     std::io::copy(&mut stdin(), &mut file)?;
                 }
                 FileAction::Delete { path } => {
@@ -517,11 +545,11 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
                     // Print the data.
                     for i in 0..nmodules {
-                        let guid = &data[0x30*i..][..0x10];
-                        let expires = LE::read_i64(&data[0x30*i + 0x10..]);
+                        let guid = &data[0x30 * i..][..0x10];
+                        let expires = LE::read_i64(&data[0x30 * i + 0x10..]);
                         let exp_time = convert_filetime(expires);
-                        let inst_total = LE::read_u32(&data[0x30*i + 0x18..]);
-                        let inst_used  = LE::read_u32(&data[0x30*i + 0x1c..]);
+                        let inst_total = LE::read_u32(&data[0x30 * i + 0x18..]);
+                        let inst_used = LE::read_u32(&data[0x30 * i + 0x1c..]);
 
                         println!("ID: {}", format_guid(guid));
                         if let Some(exp) = exp_time {
@@ -565,8 +593,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     stdin().read_to_end(&mut write_data)?;
                     if let Some(length) = length {
                         let mut read_data = vec![0; length];
-                        let nread = dev.write_read(index_group, index_offset,
-                                                   &write_data, &mut read_data)?;
+                        let nread = dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
                         if hex {
                             hexdump(&read_data[..nread]);
                         } else {
@@ -574,8 +601,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        dev.write_read_exact(index_group, index_offset,
-                                             &write_data, &mut read_data)?;
+                        dev.write_read_exact(index_group, index_offset, &write_data, &mut read_data)?;
                         print_read_value(typ, &read_data, hex);
                     }
                 }
@@ -586,14 +612,20 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
             let dev = client.device(amsaddr);
 
-            fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32,
-                            typ: &str, level: usize) {
+            fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32, typ: &str, level: usize) {
                 for field in &type_map[typ].fields {
                     if let Some(offset) = field.offset {
-                        let indent = (0..2*level).map(|_| ' ').collect::<String>();
-                        println!("     {:6x} ({:6x}) {}.{:5$} {}", base_offset + offset,
-                                 field.size, indent, field.name, field.typ, 39-2*level);
-                        print_fields(type_map, base_offset + offset, &field.typ, level+1);
+                        let indent = (0..2 * level).map(|_| ' ').collect::<String>();
+                        println!(
+                            "     {:6x} ({:6x}) {}.{:5$} {}",
+                            base_offset + offset,
+                            field.size,
+                            indent,
+                            field.name,
+                            field.typ,
+                            39 - 2 * level
+                        );
+                        print_fields(type_map, base_offset + offset, &field.typ, level + 1);
                     }
                 }
             }
@@ -604,8 +636,10 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
-                            println!("{:4x}:{:6x} ({:6x}) {:40} {}",
-                                     sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ);
+                            println!(
+                                "{:4x}:{:6x} ({:6x}) {:40} {}",
+                                sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ
+                            );
                             print_fields(&type_map, sym.ix_offset, &sym.typ, 1);
                         }
                     }
@@ -629,7 +663,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     } else {
                         let length = match length {
                             Some(l) => l,
-                            None => ads::symbol::get_size(dev, &name)?
+                            None => ads::symbol::get_size(dev, &name)?,
                         };
                         let mut read_data = vec![0; length];
                         handle.read(&mut read_data)?;
@@ -691,15 +725,15 @@ fn get_write_value(typ: VarType, value: String) -> Result<Vec<u8>, Error> {
                 return Err(Error::Str("invalid BOOL value".into()));
             }
         }
-        VarType::Byte  => parse::<u8>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Sint  => parse::<i8>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Word  => parse::<u16>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Int   => parse::<i16>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Byte => parse::<u8>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Sint => parse::<i8>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Word => parse::<u16>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Int => parse::<i16>(&value).map_err(err)?.to_le_bytes().into(),
         VarType::Dword => parse::<u32>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Dint  => parse::<i32>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Dint => parse::<i32>(&value).map_err(err)?.to_le_bytes().into(),
         VarType::Lword => parse::<u64>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Lint  => parse::<i64>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Real  => value.parse::<f32>().map_err(float_err)?.to_le_bytes().into(),
+        VarType::Lint => parse::<i64>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Real => value.parse::<f32>().map_err(float_err)?.to_le_bytes().into(),
         VarType::Lreal => value.parse::<f64>().map_err(float_err)?.to_le_bytes().into(),
     })
 }
@@ -728,14 +762,14 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
             println!("{}", v);
             return;
         }
-        VarType::Byte  => buf[0] as i128,
-        VarType::Sint  => buf[0] as i8 as i128,
-        VarType::Word  => u16::from_le_bytes(buf[..2].try_into().expect("size")) as i128,
-        VarType::Int   => i16::from_le_bytes(buf[..2].try_into().expect("size")) as i128,
+        VarType::Byte => buf[0] as i128,
+        VarType::Sint => buf[0] as i8 as i128,
+        VarType::Word => u16::from_le_bytes(buf[..2].try_into().expect("size")) as i128,
+        VarType::Int => i16::from_le_bytes(buf[..2].try_into().expect("size")) as i128,
         VarType::Dword => u32::from_le_bytes(buf[..4].try_into().expect("size")) as i128,
-        VarType::Dint  => i32::from_le_bytes(buf[..4].try_into().expect("size")) as i128,
+        VarType::Dint => i32::from_le_bytes(buf[..4].try_into().expect("size")) as i128,
         VarType::Lword => u64::from_le_bytes(buf[..8].try_into().expect("size")) as i128,
-        VarType::Lint  => i64::from_le_bytes(buf[..8].try_into().expect("size")) as i128,
+        VarType::Lint => i64::from_le_bytes(buf[..8].try_into().expect("size")) as i128,
     };
     // Only reaches here for integer types
     if hex {
@@ -747,7 +781,11 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
 
 /// If the char is not printable, replace it by a dot.
 fn printable(ch: &u8) -> char {
-    if *ch >= 32 && *ch <= 127 { *ch as char } else { '.' }
+    if *ch >= 32 && *ch <= 127 {
+        *ch as char
+    } else {
+        '.'
+    }
 }
 
 /// Print a hexdump of a byte slice in the usual format.
@@ -755,10 +793,13 @@ fn hexdump(mut data: &[u8]) {
     let mut addr = 0;
     while !data.is_empty() {
         let (line, rest) = data.split_at(data.len().min(16));
-        println!("{:#08x}: {:02x}{} | {}", addr,
-                 line.iter().format(" "),
-                 (0..16 - line.len()).map(|_| "   ").format(""),
-                 line.iter().map(printable).format(""));
+        println!(
+            "{:#08x}: {:02x}{} | {}",
+            addr,
+            line.iter().format(" "),
+            (0..16 - line.len()).map(|_| "   ").format(""),
+            line.iter().map(printable).format("")
+        );
         addr += 16;
         data = rest;
     }
@@ -770,17 +811,21 @@ const EPOCH_OFFSET: i64 = 11644473600;
 
 /// Convert Windows FILETIME to DateTime
 fn convert_filetime(ft: i64) -> Option<DateTime<Utc>> {
-    if ft == 0 { return None; }
+    if ft == 0 {
+        return None;
+    }
     let unix_ts = ft / 10_000_000 - EPOCH_OFFSET;
     DateTime::from_timestamp(unix_ts, 0)
 }
 
 /// Format a GUID.
 fn format_guid(guid: &[u8]) -> String {
-    format!("{:08X}-{:04X}-{:04X}-{:04X}-{:012X}",
-            LE::read_u32(guid),
-            LE::read_u16(&guid[4..]),
-            LE::read_u16(&guid[6..]),
-            BE::read_u16(&guid[8..]),
-            BE::read_u48(&guid[10..]))
+    format!(
+        "{:08X}-{:04X}-{:04X}-{:04X}-{:012X}",
+        LE::read_u32(guid),
+        LE::read_u16(&guid[4..]),
+        LE::read_u16(&guid[6..]),
+        BE::read_u16(&guid[8..]),
+        BE::read_u48(&guid[10..])
+    )
 }

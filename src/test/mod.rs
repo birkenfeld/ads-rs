@@ -140,8 +140,9 @@ impl Server {
         }
     }
 
-    fn send_notification(&self, off: usize, len: usize, header: &AdsHeader,
-                         bad: bool, socket: &mut TcpStream) {
+    fn send_notification(
+        &self, off: usize, len: usize, header: &AdsHeader, bad: bool, socket: &mut TcpStream,
+    ) {
         let data_len = std::mem::size_of::<SingleNotification>() + len;
 
         let mut notif_header = SingleNotification::default();
@@ -285,8 +286,8 @@ impl Server {
                 let mut mdata: Vec<u8> = vec![];
                 let mut rdata: Vec<u8> = vec![];
                 for i in 0..off as usize {
-                    let rlen = LE::read_u32(&data[16 + i*12 + 8..]) as usize;
-                    let (mut d, e) = self.do_read(&data[16 + i*12..][..12]);
+                    let rlen = LE::read_u32(&data[16 + i * 12 + 8..]) as usize;
+                    let (mut d, e) = self.do_read(&data[16 + i * 12..][..12]);
                     mdata.write_u32::<LE>(e).unwrap();
                     d.resize(rlen + 8, 0);
                     mdata.write_u32::<LE>(d.len() as u32 - 8).unwrap();
@@ -297,11 +298,11 @@ impl Server {
                 out.extend(rdata);
             }
             index::SUMUP_WRITE => {
-                let mut woff = 16 + off as usize*12;
+                let mut woff = 16 + off as usize * 12;
                 out.write_u32::<LE>(4 * off).unwrap();
                 for i in 0..off as usize {
-                    let wlen = LE::read_u32(&data[16 + i*12 + 8..]) as usize;
-                    let mut subdata = data[16 + i*12..][..12].to_vec();
+                    let wlen = LE::read_u32(&data[16 + i * 12 + 8..]) as usize;
+                    let mut subdata = data[16 + i * 12..][..12].to_vec();
                     subdata.extend(&data[woff..][..wlen]);
                     woff += wlen;
                     let (_, e) = self.do_write(&subdata);
@@ -311,10 +312,10 @@ impl Server {
             index::SUMUP_READWRITE => {
                 let mut mdata: Vec<u8> = vec![];
                 let mut rdata: Vec<u8> = vec![];
-                let mut woff = 16 + off as usize*16;
+                let mut woff = 16 + off as usize * 16;
                 for i in 0..off as usize {
-                    let wlen = LE::read_u32(&data[16 + i*16 + 12..]) as usize;
-                    let mut subdata = data[16 + i*16..][..16].to_vec();
+                    let wlen = LE::read_u32(&data[16 + i * 16 + 12..]) as usize;
+                    let mut subdata = data[16 + i * 16..][..16].to_vec();
                     subdata.extend(&data[woff..][..wlen]);
                     woff += wlen;
                     let (d, e) = self.do_read_write(&subdata);
@@ -333,7 +334,7 @@ impl Server {
             index::SUMUP_ADDDEVNOTE => {
                 out.write_u32::<LE>(8 * off).unwrap();
                 for i in 0..off as usize {
-                    let (d, e) = self.do_add_notif(&data[16 + i*40..][..40]);
+                    let (d, e) = self.do_add_notif(&data[16 + i * 40..][..40]);
                     out.write_u32::<LE>(e).unwrap();
                     if d.len() > 4 {
                         out.extend(&d[4..]);
@@ -345,7 +346,7 @@ impl Server {
             index::SUMUP_DELDEVNOTE => {
                 out.write_u32::<LE>(4 * off).unwrap();
                 for i in 0..off as usize {
-                    let (_, e) = self.do_del_notif(&data[16 + i*4..][..4]);
+                    let (_, e) = self.do_del_notif(&data[16 + i * 4..][..4]);
                     out.write_u32::<LE>(e).unwrap();
                 }
             }
@@ -451,10 +452,10 @@ impl Server {
 #[derive(FromBytes, IntoBytes, Immutable, Debug, Default)]
 #[repr(C)]
 struct SingleNotification {
-    len:     U32,
-    stamps:  U32,
-    stamp:   U64,
+    len: U32,
+    stamps: U32,
+    stamp: U64,
     samples: U32,
-    handle:  U32,
-    size:    U32,
+    handle: U32,
+    size: U32,
 }

@@ -21,5 +21,6 @@ jobs:
         with:
           components: clippy
           toolchain: ${{ matrix.toolchain }}
+      - run: cargo fmt --check
       - run: cargo clippy --all-targets
       - run: cargo test --all
