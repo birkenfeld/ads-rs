@@ -293,7 +293,7 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             (platform, major, minor, build, string)
             
         } else {
-            ("Unknown OS info format", 0, 0, 0 , "".into())
+            ("Unknown OS info format", 0, 0, 0, "".into())
         }
     } else {
         ("No OS info", 0, 0, 0, "".into())
