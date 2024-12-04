@@ -282,7 +282,7 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
                 bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
             }
             else if platform == "TwinCAT/BSD" {
-                //the data after is always garbage 
+                // The following data is TwinCAT/BSD in bytes. But we know the platform from 0. 
                 "".into()
             } else {
                 iter::from_fn(|| bytes.read_u16::<LE>().ok())
