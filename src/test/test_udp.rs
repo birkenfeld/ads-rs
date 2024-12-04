@@ -45,7 +45,7 @@ fn test_udp() {
     assert_eq!(info.hostname, "box");
     assert_eq!(info.netid, tgt_netid);
     assert_eq!(info.twincat_version, (4, 1, 7));
-    assert_eq!(info.os_version, ("Windows NT", Some((5, 8, 9).into()), "Test".into()));
+    assert_eq!(info.os_version, ("Windows NT", 5, 8, 9, "Test".into()));
 
     udp::add_route(("127.0.0.1", port), tgt_netid, "a", Some("route"), None, None, false).unwrap();
     assert!(udp::add_route(("127.0.0.1", port), tgt_netid, "a", None, None, None, false).is_err());

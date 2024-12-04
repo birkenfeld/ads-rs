@@ -233,31 +233,6 @@ pub fn get_netid(target: (&str, u16)) -> Result<AmsNetId> {
     Ok(reply.get_source().netid())
 }
 
-#[derive(PartialEq)]
-/// Type to display major.minor.build
-pub struct Semver {
-    major : u32,
-    minor : u32,
-    // Also known as patch
-    build : u32
-}
-
-impl Debug for Semver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.build)
-    }
-}
-
-impl From<(u32, u32, u32)> for Semver{
-    fn from((major, minor, build): (u32, u32, u32)) -> Self {
-        Self {
-            major,
-            minor,
-            build
-        }
-    }
-}
-
 /// Information about the system running TwinCAT.
 pub struct SysInfo {
     /// AMS NetID of the system.
@@ -267,7 +242,7 @@ pub struct SysInfo {
     /// The TwinCAT (major, minor, build) version.
     pub twincat_version: (u8, u8, u16),
     /// The OS (name, major, minor, build, service_pack) version.
-    pub os_version: (&'static str, Option<Semver>, String),
+    pub os_version: (&'static str, u32, u32, u32, String),
     /// The system's fingerprint.
     pub fingerprint: String,
 }
@@ -289,41 +264,40 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
     // Parse OS version. If Windows OSVERSIONINFO structure, it will
     // consists of major/minor/build versions, the platform, and a "service
     // pack" string, coded as UTF-16. 
-    // If TwinCAT/BSD currently no information is given other than TwinCAT/BSD
+    // If TwinCAT/BSD currently it will give major minor and build that is displayed 
     let os_version = if let Some(mut bytes) = reply.get_bytes(Tag::OSVersion) {
         if bytes.len() >= 22 {
-            //check if the os version is TwinCAT/BDS all the rest is not included for TC BSD. Simply just TwinCAT/BSD.
-            let version_info = String::from_utf8_lossy(bytes);
-            let is_bsd = version_info.contains("TwinCAT/BSD");
-            if is_bsd {
-                ("TwinCAT/BSD", None, "".into())
-            } else {
-                // Size of the structure (redundant).
-                let _ = bytes.read_u32::<LE>().expect("size");
-                let major = bytes.read_u32::<LE>().expect("size");
-                let minor = bytes.read_u32::<LE>().expect("size");
-                let build = bytes.read_u32::<LE>().expect("size");
-                let platform = match bytes.read_u32::<LE>().expect("size") {
-                    1 => "TC/RTOS",
-                    2 => "Windows NT",
-                    3 => "Windows CE",
-                    _ => "Unknown platform",
-                };
-                let string = if platform == "TC/RTOS" {
-                    bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
-                } else {
-                    iter::from_fn(|| bytes.read_u16::<LE>().ok())
-                        .take_while(|&ch| ch != 0)
-                        .filter_map(|ch| char::from_u32(ch as u32))
-                        .collect()
-                };
-                (platform, Some((major, minor, build).into()), string)
+            // Size of the structure (redundant).
+            let _ = bytes.read_u32::<LE>().expect("size");
+            let major = bytes.read_u32::<LE>().expect("size");
+            let minor = bytes.read_u32::<LE>().expect("size");
+            let build = bytes.read_u32::<LE>().expect("size");
+            let platform = match bytes.read_u32::<LE>().expect("size") {
+                0 => "TwinCAT/BSD",
+                1 => "TC/RTOS",
+                2 => "Windows NT",
+                3 => "Windows CE",
+                _ => "Unknown platform",
+            };
+            let string = if platform == "TC/RTOS" {
+                bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
             }
+            else if platform == "TwinCAT/BSD" {
+                //the data after is always garbage 
+                "".into()
+            } else {
+                iter::from_fn(|| bytes.read_u16::<LE>().ok())
+                    .take_while(|&ch| ch != 0)
+                    .filter_map(|ch| char::from_u32(ch as u32))
+                    .collect()
+            };
+            (platform, major, minor, build, string)
+            
         } else {
-            ("Unknown OS info format", None, "".into())
+            ("Unknown OS info format", 0, 0, 0 , "".into())
         }
     } else {
-        ("No OS info", None, "".into())
+        ("No OS info", 0, 0, 0, "".into())
     };
     Ok(SysInfo {
         netid: reply.get_source().netid(),

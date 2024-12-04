@@ -427,18 +427,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 "TwinCAT version: {}.{}.{}",
                 info.twincat_version.0, info.twincat_version.1, info.twincat_version.2
             );
-            match info.os_version.1 {
-                Some(ver) => {
-                    println!(
-                        "OS version: {} {:?} {}",
-                            info.os_version.0, ver, info.os_version.2);
-                },
-                None => {
-                    println!(
-                        "OS version: {} {}",
-                            info.os_version.0, info.os_version.2);
-                },
-            }
+            println!("OS version: {} {}.{}.{} {}",
+                     info.os_version.0, info.os_version.1, info.os_version.2,
+                     info.os_version.3, info.os_version.4);
             
             if !info.fingerprint.is_empty() {
                 println!("Fingerprint: {}", info.fingerprint);
