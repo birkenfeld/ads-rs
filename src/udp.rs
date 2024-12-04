@@ -11,7 +11,6 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 use crate::errors::ErrContext;
 use crate::{AmsAddr, AmsNetId, Error, Result};
-use std::fmt::Debug;
 
 /// Magic number for the first four bytes of each UDP packet.
 pub const BECKHOFF_UDP_MAGIC: u32 = 0x_71_14_66_03;
