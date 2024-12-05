@@ -262,8 +262,8 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
 
     // Parse OS version. If Windows OSVERSIONINFO structure, it will
     // consists of major/minor/build versions, the platform, and a "service
-    // pack" string, coded as UTF-16. 
-    // If TwinCAT/BSD currently it will give major minor and build that is displayed 
+    // pack" string, coded as UTF-16.
+    // If TwinCAT/BSD currently it will give major minor and build that is displayed
     let os_version = if let Some(mut bytes) = reply.get_bytes(Tag::OSVersion) {
         if bytes.len() >= 22 {
             // Size of the structure (redundant).
@@ -280,9 +280,8 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             };
             let string = if platform == "TC/RTOS" {
                 bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
-            }
-            else if platform == "TwinCAT/BSD" {
-                // The following data is TwinCAT/BSD in bytes. But we know the platform from 0. 
+            } else if platform == "TwinCAT/BSD" {
+                // The following data is TwinCAT/BSD in bytes. But we know the platform from 0.
                 "".into()
             } else {
                 iter::from_fn(|| bytes.read_u16::<LE>().ok())
@@ -291,7 +290,6 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
                     .collect()
             };
             (platform, major, minor, build, string)
-            
         } else {
             ("Unknown OS info format", 0, 0, 0, "".into())
         }
