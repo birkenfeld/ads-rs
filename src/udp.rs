@@ -260,10 +260,10 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
         (0, 0, 0)
     };
 
-    // Parse OS version.  This is a Windows OSVERSIONINFO structure, which
+    // Parse OS version. If Windows OSVERSIONINFO structure, it will
     // consists of major/minor/build versions, the platform, and a "service
-    // pack" string, coded as UTF-16.  It is not known how the data looks on
-    // non-Windows devices, but hopefully the format is kept the same.
+    // pack" string, coded as UTF-16.
+    // If TwinCAT/BSD currently it will give major minor and build that is displayed
     let os_version = if let Some(mut bytes) = reply.get_bytes(Tag::OSVersion) {
         if bytes.len() >= 22 {
             // Size of the structure (redundant).
@@ -272,6 +272,7 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             let minor = bytes.read_u32::<LE>().expect("size");
             let build = bytes.read_u32::<LE>().expect("size");
             let platform = match bytes.read_u32::<LE>().expect("size") {
+                0 => "TwinCAT/BSD",
                 1 => "TC/RTOS",
                 2 => "Windows NT",
                 3 => "Windows CE",
@@ -279,6 +280,9 @@ pub fn get_info(target: (&str, u16)) -> Result<SysInfo> {
             };
             let string = if platform == "TC/RTOS" {
                 bytes.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
+            } else if platform == "TwinCAT/BSD" {
+                // The following data is TwinCAT/BSD in bytes. But we know the platform from 0.
+                "".into()
             } else {
                 iter::from_fn(|| bytes.read_u16::<LE>().ok())
                     .take_while(|&ch| ch != 0)
