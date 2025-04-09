@@ -274,7 +274,7 @@ impl Client {
     /// The local NetID `127.0.0.1.1.1` is mapped to the client's source NetID,
     /// so that you can connect to a local PLC using:
     ///
-    /// ```rust,ignore
+    /// ```ignore
     /// let client = Client::new("127.0.0.1", ..., Source::Request);
     /// let device = client.device(AmsAddr::new(AmsNetId::local(), 851));
     /// ```
@@ -593,29 +593,37 @@ impl Device<'_> {
 
     /// Read multiple index groups/offsets with one ADS request (a "sum-up" request).
     ///
-    /// The returned data can be shorter than the buffer in each case, the `length`
-    /// member of the `ReadRequest` is set to the returned length.
-    ///
     /// This function only returns Err on errors that cause the whole sum-up
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single read can have returned its
-    /// own error.  The [`ReadRequest::data`] method will return either the
-    /// properly truncated returned data or the error for each read.
+    /// own error.
+    ///
+    /// The returned data can be shorter than the buffer in each request.  The
+    /// [`ReadRequest::data`] method will return either the properly truncated
+    /// returned data or the error for each read.
     ///
     /// Example:
-    /// ```ignore
+    /// ```no_run
+    /// # fn main() -> ads::Result<()> {
+    /// # use ads::client::*;
+    /// # let client = Client::new(("", ads::PORT), ads::Timeouts::none(), ads::Source::Auto)?;
+    /// # let device = client.device(ads::AmsAddr::new(Default::default(), 0));
+    /// # let (ix1, ix2, off1, off2) = (0, 0, 0, 0);
     /// // create buffers
-    /// let mut buf_1 = [0; 128];  // request reading 128 bytes
+    /// let mut buf_1 = [0; 128];  // request reading 128 bytes each,
     /// let mut buf_2 = [0; 128];  // from two indices
     /// // create the request structures
-    /// let mut req_1 = ReadRequest::new(ix1, off1, &mut buf_1);
-    /// let mut req_2 = ReadRequest::new(ix2, off2, &mut buf_2);
-    /// //  actual request
-    /// device.read_multi(&mut [req_1, req_2])?;
+    /// let req_1 = ReadRequest::new(ix1, off1, &mut buf_1);
+    /// let req_2 = ReadRequest::new(ix2, off2, &mut buf_2);
+    /// let mut requests = [req_1, req_2];
+    /// // execute the multi-request on the remote end
+    /// device.read_multi(&mut requests)?;
     /// // extract the resulting data, checking individual reads for
     /// // errors and getting the returned data otherwise
-    /// let res_1 = req_1.data()?;
-    /// let res_2 = req_2.data()?;
+    /// let res_1 = requests[0].data()?;
+    /// let res_2 = requests[1].data()?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn read_multi(&self, requests: &mut [ReadRequest]) -> Result<()> {
         let nreq = requests.len();
@@ -670,8 +678,31 @@ impl Device<'_> {
     /// This function only returns Err on errors that cause the whole sum-up
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single write can have returned its
-    /// own error.  The [`WriteRequest::ensure`] method will return the error for
-    /// each write.
+    /// own error.  To retrieve and handle them, the [`WriteRequest::ensure`]
+    /// method should be called on each request.
+    ///
+    /// Example:
+    /// ```no_run
+    /// # fn main() -> ads::Result<()> {
+    /// # use ads::client::*;
+    /// # let client = Client::new(("", ads::PORT), ads::Timeouts::none(), ads::Source::Auto)?;
+    /// # let device = client.device(ads::AmsAddr::new(Default::default(), 0));
+    /// # let (ix1, ix2, off1, off2) = (0, 0, 0, 0);
+    /// // create buffers
+    /// let buf_1 = [1, 5, 7, 10];  // request writing 4 bytes each,
+    /// let buf_2 = [0, 8, 9, 11];  // to two indices
+    /// // create the request structures
+    /// let req_1 = WriteRequest::new(ix1, off1, &buf_1);
+    /// let req_2 = WriteRequest::new(ix2, off2, &buf_2);
+    /// let mut requests = [req_1, req_2];
+    /// // execute the multi-request on the remote end
+    /// device.write_multi(&mut requests)?;
+    /// // check the individual writes for errors
+    /// requests[0].ensure()?;
+    /// requests[1].ensure()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn write_multi(&self, requests: &mut [WriteRequest]) -> Result<()> {
         let nreq = requests.len();
         let rlen = size_of::<u32>() * nreq;
@@ -735,8 +766,9 @@ impl Device<'_> {
     /// request to fail (e.g. if the device doesn't support such requests).  If
     /// the request as a whole succeeds, each single write/read can have
     /// returned its own error.  The [`WriteReadRequest::data`] method will
-    /// return either the properly truncated returned data or the error for each
-    /// write/read.
+    /// return either the returned data or the error for each write/read.
+    ///
+    /// See [`Device::read_multi`] or [`Device::write_multi`] for analogous usage examples.
     pub fn write_read_multi(&self, requests: &mut [WriteReadRequest]) -> Result<()> {
         let nreq = requests.len();
         let rlen = requests.iter().map(|r| size_of::<ResultLength>() + r.rbuf.len()).sum::<usize>();

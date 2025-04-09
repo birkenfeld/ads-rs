@@ -10,7 +10,8 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
+//! ```no_run
+//! # fn main() -> ads::Result<()> {
 //! // Open a connection to an ADS device identified by hostname/IP and port.
 //! // For TwinCAT devices, a route must be set to allow the client to connect.
 //! // The source AMS address is automatically generated from the local IP,
@@ -35,6 +36,8 @@
 //! // Read data in form of an u32 from the handle.
 //! let value: u32 = handle.read_value()?;
 //! println!("MY_SYMBOL value is {}", value);
+//! # Ok(())
+//! # }
 //! ```
 
 #![deny(missing_docs)]
