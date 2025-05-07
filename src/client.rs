@@ -8,7 +8,7 @@ use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    RwLock,
+    Mutex, RwLock,
 };
 use std::time::Duration;
 
@@ -132,6 +132,8 @@ pub struct Client {
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
     notif_handles: RwLock<BTreeSet<(AmsAddr, notif::Handle)>>,
+    /// Mutex around IO operations
+    io_mutex: Mutex<()>,
     /// If we opened our local port with the router
     source_port_opened: bool,
 }
@@ -140,7 +142,8 @@ impl Drop for Client {
     fn drop(&mut self) {
         // the notif_handles lock should only be poisioned in panics coming
         // from std code, so a panic is probably acceptable here.
-        let handles = self.notif_handles
+        let handles = self
+            .notif_handles
             .get_mut()
             .expect("notification handle cache lock was poisoned");
 
@@ -264,6 +267,7 @@ impl Client {
             read_timeout: timeouts.read,
             notif_handles: RwLock::default(),
             source_port_opened,
+            io_mutex: Mutex::new(()),
         })
     }
 
@@ -336,21 +340,26 @@ impl Client {
         for buf in data_in {
             request.extend_from_slice(buf);
         }
-        // &T impls Write for T: Write, so no &mut self required.
-        (&self.socket).write_all(&request).ctx("sending request")?;
 
-        // Get a reply from the reader thread, with timeout or not.
-        let reply = if let Some(tmo) = self.read_timeout {
-            self.reply_recv
-                .recv_timeout(tmo)
-                .map_err(|_| io::ErrorKind::TimedOut.into())
-                .ctx("receiving reply (route set?)")?
-        } else {
-            self.reply_recv
-                .recv()
-                .map_err(|_| io::ErrorKind::UnexpectedEof.into())
-                .ctx("receiving reply (route set?)")?
-        }?;
+        let reply = {
+            let _io_guard = self.io_mutex.lock().expect("attempted to communicate after an io panic");
+
+            // &T impls Write for T: Write, so no &mut self required.
+            (&self.socket).write_all(&request).ctx("sending request")?;
+
+            // Get a reply from the reader thread, with timeout or not.
+            if let Some(tmo) = self.read_timeout {
+                self.reply_recv
+                    .recv_timeout(tmo)
+                    .map_err(|_| io::ErrorKind::TimedOut.into())
+                    .ctx("receiving reply (route set?)")?
+            } else {
+                self.reply_recv
+                    .recv()
+                    .map_err(|_| io::ErrorKind::UnexpectedEof.into())
+                    .ctx("receiving reply (route set?)")?
+            }?
+        };
 
         // Validate the incoming reply.  The reader thread already made sure that
         // it is consistent and addressed to us.
