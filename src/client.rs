@@ -113,6 +113,7 @@ pub enum Source {
 /// The Client's communication methods use `&self`, so that it can be freely
 /// shared within one thread, or sent, between threads.  Wrappers such as
 /// `Device` or `symbol::Handle` use a `&Client` as well.
+#[derive(Debug)]
 pub struct Client {
     /// TCP connection (duplicated with the reader)
     socket: TcpStream,
