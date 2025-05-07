@@ -1,12 +1,15 @@
 //! Contains the TCP client to connect to an ADS server.
 
-use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::convert::{TryFrom, TryInto};
 use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    RwLock,
+};
 use std::time::Duration;
 
 use byteorder::{ByteOrder, ReadBytesExt, LE};
@@ -115,7 +118,7 @@ pub struct Client {
     socket: TcpStream,
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
-    invoke_id: Cell<u32>,
+    invoke_id: AtomicU32,
     /// Read timeout (actually receive timeout for the channel)
     read_timeout: Option<Duration>,
     /// The AMS address of the client
@@ -127,16 +130,21 @@ pub struct Client {
     /// Receiver for notifications: cloned and given out to interested parties
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
-    notif_handles: RefCell<BTreeSet<(AmsAddr, notif::Handle)>>,
+    notif_handles: RwLock<BTreeSet<(AmsAddr, notif::Handle)>>,
     /// If we opened our local port with the router
     source_port_opened: bool,
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
+        // the notif_handles lock should only be poisioned in panics coming
+        // from std code, so a panic is probably acceptable here.
+        let handles = self.notif_handles
+            .get_mut()
+            .expect("notification handle cache lock was poisoned");
+
         // Close all open notification handles.
-        let handles = std::mem::take(&mut *self.notif_handles.borrow_mut());
-        for (addr, handle) in handles {
+        for (addr, handle) in std::mem::take(handles) {
             let _ = self.device(addr).delete_notification(handle);
         }
 
@@ -251,9 +259,9 @@ impl Client {
             buf_send,
             reply_recv,
             notif_recv,
-            invoke_id: Cell::new(0),
+            invoke_id: AtomicU32::new(1),
             read_timeout: timeouts.read,
-            notif_handles: RefCell::default(),
+            notif_handles: RwLock::default(),
             source_port_opened,
         })
     }
@@ -298,7 +306,7 @@ impl Client {
     ) -> Result<usize> {
         // Increase the invoke ID.  We could also generate a random u32, but
         // this way the sequence of packets can be tracked.
-        self.invoke_id.set(self.invoke_id.get().wrapping_add(1));
+        let dispatched_invoke_id = self.invoke_id.fetch_add(1, Ordering::Relaxed);
 
         // The data we send is the sum of all data_in buffers.
         let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
@@ -316,7 +324,7 @@ impl Client {
             state_flags: U16::new(4), // state flags (4 = send command)
             data_length: U32::new(data_in_len as u32), // overflow checked above
             error_code: U32::new(0),
-            invoke_id: U32::new(self.invoke_id.get()),
+            invoke_id: U32::new(dispatched_invoke_id),
         };
 
         // Collect the outgoing data.  Note, allocating a Vec and calling
@@ -357,7 +365,7 @@ impl Client {
         let state_flags = ptr.read_u16::<LE>().expect("size");
         let data_len = ptr.read_u32::<LE>().expect("size");
         let error_code = ptr.read_u32::<LE>().expect("size");
-        let invoke_id = ptr.read_u32::<LE>().expect("size");
+        let response_invoke_id = ptr.read_u32::<LE>().expect("size");
         let result = if reply.len() >= AMS_HEADER_SIZE + 4 {
             ptr.read_u32::<LE>().expect("size")
         } else {
@@ -373,8 +381,8 @@ impl Client {
             return Err(Error::Reply(cmd.action(), "unexpected state flags", state_flags.into()));
         }
         // Invoke ID must match what we sent.
-        if invoke_id != self.invoke_id.get() {
-            return Err(Error::Reply(cmd.action(), "unexpected invoke ID", invoke_id));
+        if response_invoke_id != dispatched_invoke_id {
+            return Err(Error::Reply(cmd.action(), "unexpected invoke ID", response_invoke_id));
         }
         // Check error code in AMS header.
         if error_code != 0 {
@@ -853,7 +861,13 @@ impl Device<'_> {
             &[data.as_bytes()],
             &mut [handle.as_mut_bytes()],
         )?;
-        self.client.notif_handles.borrow_mut().insert((self.addr, handle.get()));
+
+        self.client
+            .notif_handles
+            .write()
+            .expect("notification handle cache lock poisoned")
+            .insert((self.addr, handle.get()));
+
         Ok(handle.get())
     }
 
@@ -885,7 +899,11 @@ impl Device<'_> {
             .communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
         for req in requests {
             if let Ok(handle) = req.handle() {
-                self.client.notif_handles.borrow_mut().insert((self.addr, handle));
+                self.client
+                    .notif_handles
+                    .write()
+                    .expect("notification handle cache lock poisoned")
+                    .insert((self.addr, handle));
             }
         }
         Ok(())
@@ -899,7 +917,13 @@ impl Device<'_> {
             &[U32::new(handle).as_bytes()],
             &mut [],
         )?;
-        self.client.notif_handles.borrow_mut().remove(&(self.addr, handle));
+
+        self.client
+            .notif_handles
+            .write()
+            .expect("notification handle cache lock poisoned")
+            .remove(&(self.addr, handle));
+
         Ok(())
     }
 
@@ -931,7 +955,11 @@ impl Device<'_> {
             .communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
         for req in requests {
             if req.ensure().is_ok() {
-                self.client.notif_handles.borrow_mut().remove(&(self.addr, req.req.get()));
+                self.client
+                    .notif_handles
+                    .write()
+                    .expect("notification handle cache lock poisoned")
+                    .remove(&(self.addr, req.req.get()));
             }
         }
         Ok(())
