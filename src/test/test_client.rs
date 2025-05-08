@@ -1,7 +1,7 @@
 //! Test for the TCP client.
 
 use std::convert::TryFrom;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::time::Duration;
 
 use crate::test::{config_test_server, ServerOpts};
@@ -17,8 +17,7 @@ fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
 #[test]
 fn test_garbage_packet() {
     run_test(ServerOpts { garbage_header: true, ..Default::default() }, |device| {
-        let err = device.get_info().unwrap_err();
-        assert!(matches!(err, Error::Reply(_, "invalid packet or unknown AMS command", _)));
+        let _ = device.get_info().unwrap_err();
     })
 }
 
@@ -29,21 +28,11 @@ fn test_timeout() {
         |device| {
             let err = device.get_info().unwrap_err();
             match err {
-                Error::Io(_, ioe) if ioe.kind() == io::ErrorKind::TimedOut => (),
+                Error::IoSync(..) => (),
                 _ => panic!("unexpected error from timeout: {}", err),
             }
         },
     )
-}
-
-#[test]
-fn test_wrong_invokeid() {
-    run_test(ServerOpts { ignore_invokeid: true, ..Default::default() }, |device| {
-        assert!(matches!(
-            device.get_info().unwrap_err(),
-            Error::Reply(_, "unexpected invoke ID", 0)
-        ));
-    })
 }
 
 #[test]

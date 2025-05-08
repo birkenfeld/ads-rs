@@ -61,7 +61,7 @@ pub struct ServerOpts {
 }
 
 pub fn config_test_server(opts: ServerOpts) -> u16 {
-    SERVER.with(|obj| {
+    SERVER.with(|obj: &Lazy<(u16, Arc<Mutex<ServerOpts>>)>| {
         let (port, server_opts) = &**obj;
         *server_opts.lock().unwrap() = opts;
         *port

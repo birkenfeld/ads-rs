@@ -1,20 +1,22 @@
 //! Contains the TCP client to connect to an ADS server.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Mutex, RwLock,
+    Arc, RwLock,
 };
+use std::thread::JoinHandle;
 use std::time::Duration;
 
-use byteorder::{ByteOrder, ReadBytesExt, LE};
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use byteorder::{ByteOrder, LE};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use itertools::Itertools;
+use oneshot::RecvTimeoutError;
 
 use crate::errors::{ads_error, ErrContext};
 use crate::notif;
@@ -22,6 +24,8 @@ use crate::{AmsAddr, AmsNetId, Error, Result};
 
 use zerocopy::byteorder::little_endian::{U16, U32};
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
+
+type PendingMap = Arc<RwLock<BTreeMap<u32, oneshot::Sender<Option<(AdsHeader, Vec<u8>)>>>>>;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -68,9 +72,9 @@ impl Command {
 
 /// Size of the AMS/TCP + AMS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
-pub(crate) const TCP_HEADER_SIZE: usize = 6;
-pub(crate) const AMS_HEADER_SIZE: usize = 38; // including AMS/TCP header
-pub(crate) const DEFAULT_BUFFER_SIZE: usize = 100;
+pub(crate) const AMS_TCP_HEADER_SIZE: usize = 6;
+pub(crate) const AMS_HEADER_SIZE: usize = 32;
+pub(crate) const ADS_HEADER_SIZE: usize = AMS_TCP_HEADER_SIZE + AMS_HEADER_SIZE; // including AMS/TCP header
 
 /// Holds the different timeouts that will be used by the Client.
 /// None means no timeout in every case.
@@ -116,7 +120,7 @@ pub enum Source {
 #[derive(Debug)]
 pub struct Client {
     /// TCP connection (duplicated with the reader)
-    socket: TcpStream,
+    socket: RwLock<TcpStream>,
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
     invoke_id: AtomicU32,
@@ -124,16 +128,14 @@ pub struct Client {
     read_timeout: Option<Duration>,
     /// The AMS address of the client
     source: AmsAddr,
-    /// Sender for used Vec buffers to the reader thread
-    buf_send: Sender<Vec<u8>>,
-    /// Receiver for synchronous replies: used in `communicate`
-    reply_recv: Receiver<Result<Vec<u8>>>,
+    /// Active requests
+    pending: PendingMap,
     /// Receiver for notifications: cloned and given out to interested parties
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
     notif_handles: RwLock<BTreeSet<(AmsAddr, notif::Handle)>>,
-    /// Mutex around IO operations
-    io_mutex: Mutex<()>,
+    /// IO worker
+    worker: ClientWorker,
     /// If we opened our local port with the router
     source_port_opened: bool,
 }
@@ -147,22 +149,20 @@ impl Drop for Client {
             .get_mut()
             .expect("notification handle cache lock was poisoned");
 
-        // Close all open notification handles.
-        for (addr, handle) in std::mem::take(handles) {
-            let _ = self.device(addr).delete_notification(handle);
-        }
-
         // Remove our port from the router, if necessary.
         if self.source_port_opened {
             let mut close_port_msg = [1, 0, 2, 0, 0, 0, 0, 0];
             LE::write_u16(&mut close_port_msg[6..], self.source.port());
-            let _ = self.socket.write_all(&close_port_msg);
+
+            let _ = self.socket.write().map(|mut socket| socket.write_all(&close_port_msg));
         }
 
-        // Need to shutdown the connection since the socket is duplicated in the
-        // reader thread.  This will cause the read() in the thread to return
-        // with no data.
-        let _ = self.socket.shutdown(Shutdown::Both);
+        self.worker.stop();
+
+        // Close all open notification handles.
+        for (addr, handle) in std::mem::take(handles) {
+            let _ = self.device(addr).delete_notification(handle);
+        }
     }
 }
 
@@ -246,28 +246,30 @@ impl Client {
 
         // Clone the socket for the reader thread and create our channels for
         // bidirectional communication.
-        let socket_clone = socket.try_clone().ctx("cloning TCP socket")?;
-        let (buf_send, buf_recv) = bounded(10);
-        let (reply_send, reply_recv) = bounded(1);
-        let (notif_send, notif_recv) = unbounded();
-        let mut source_bytes = [0; 8];
-        source.write_to(&mut &mut source_bytes[..]).expect("size");
+        let (notif_tx, notif_rx) = unbounded();
+
+        let pending = Arc::new(RwLock::new(BTreeMap::new()));
 
         // Start the reader thread.
-        let reader = Reader { socket: socket_clone, source: source_bytes, buf_recv, reply_send, notif_send };
-        std::thread::spawn(|| reader.run());
+        let mut worker = ClientWorker {
+            socket: socket.try_clone().ctx("cloning socket")?,
+            source: source.clone(),
+            pending: pending.clone(),
+            handles: None,
+        };
+
+        worker.start(notif_tx);
 
         Ok(Client {
-            socket,
             source,
-            buf_send,
-            reply_recv,
-            notif_recv,
+            worker,
+            source_port_opened,
+            pending,
+            socket: RwLock::new(socket),
+            notif_recv: notif_rx,
             invoke_id: AtomicU32::new(1),
             read_timeout: timeouts.read,
             notif_handles: RwLock::default(),
-            source_port_opened,
-            io_mutex: Mutex::new(()),
         })
     }
 
@@ -307,17 +309,17 @@ impl Client {
     /// the return value specifies the number of total valid bytes.  It is up to
     /// the caller to determine what this means in terms of the passed buffers.
     pub fn communicate(
-        &self, cmd: Command, target: AmsAddr, data_in: &[&[u8]], data_out: &mut [&mut [u8]],
+        &self, cmd: Command, target: AmsAddr, payload_bufs: &[&[u8]], result_bufs: &mut [&mut [u8]],
     ) -> Result<usize> {
         // Increase the invoke ID.  We could also generate a random u32, but
         // this way the sequence of packets can be tracked.
         let dispatched_invoke_id = self.invoke_id.fetch_add(1, Ordering::Relaxed);
 
         // The data we send is the sum of all data_in buffers.
-        let data_in_len = data_in.iter().map(|v| v.len()).sum::<usize>();
+        let payload_len = payload_bufs.iter().map(|v| v.len()).sum::<usize>();
 
         // Create outgoing header.
-        let ads_data_len = AMS_HEADER_SIZE - TCP_HEADER_SIZE + data_in_len;
+        let ads_data_len = AMS_HEADER_SIZE + payload_len;
         let header = AdsHeader {
             ams_cmd: 0, // send command
             length: U32::new(ads_data_len.try_into()?),
@@ -327,213 +329,308 @@ impl Client {
             src_port: U16::new(self.source.port()),
             command: U16::new(cmd as u16),
             state_flags: U16::new(4), // state flags (4 = send command)
-            data_length: U32::new(data_in_len as u32), // overflow checked above
+            data_length: U32::new(payload_len as u32), // overflow checked above
             error_code: U32::new(0),
             invoke_id: U32::new(dispatched_invoke_id),
         };
 
+        let mut ads_payload_buf = Vec::with_capacity(header.length.get() as usize + payload_len);
+
+        ads_payload_buf.extend_from_slice(header.as_bytes());
+
         // Collect the outgoing data.  Note, allocating a Vec and calling
         // `socket.write_all` only once is faster than writing in multiple
         // steps, even with TCP_NODELAY.
-        let mut request = Vec::with_capacity(ads_data_len);
-        request.extend_from_slice(header.as_bytes());
-        for buf in data_in {
-            request.extend_from_slice(buf);
+        for buf in payload_bufs.iter() {
+            ads_payload_buf.extend_from_slice(buf);
         }
 
-        let reply = {
-            let _io_guard = self.io_mutex.lock().expect("attempted to communicate after an io panic");
+        let (resp_tx, resp_rx) = oneshot::channel();
 
-            // &T impls Write for T: Write, so no &mut self required.
-            (&self.socket).write_all(&request).ctx("sending request")?;
+        self.pending
+            .write()
+            .expect("pending command map lock poisoned")
+            .insert(dispatched_invoke_id, resp_tx);
 
-            // Get a reply from the reader thread, with timeout or not.
-            if let Some(tmo) = self.read_timeout {
-                self.reply_recv
-                    .recv_timeout(tmo)
-                    .map_err(|_| io::ErrorKind::TimedOut.into())
-                    .ctx("receiving reply (route set?)")?
-            } else {
-                self.reply_recv
-                    .recv()
-                    .map_err(|_| io::ErrorKind::UnexpectedEof.into())
-                    .ctx("receiving reply (route set?)")?
-            }?
+        self.socket
+            .write()
+            .expect("panicked during socket read")
+            .write_all(&ads_payload_buf)
+            .ctx("dispatching assembled command payload")?;
+
+        let (resp_header, resp_buf) = match self.read_timeout {
+            Some(timeout) => match resp_rx.recv_timeout(timeout) {
+                Ok(Some((header, payload))) => (header, payload),
+
+                Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Error::IoSync(
+                        "waiting for response to dispatched request",
+                        "response channel was closed",
+                        dispatched_invoke_id,
+                    ));
+                }
+
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(std::io::ErrorKind::TimedOut.into())
+                        .ctx("waiting for response to dispatched request")
+                }
+            },
+
+            None => match resp_rx.recv().map_err(|e| e.to_string()) {
+                Ok(Some((header, payload))) => (header, payload),
+
+                Ok(None) | Err(_) => {
+                    return Err(Error::IoSync(
+                        "waiting for response to dispatched request",
+                        "response channel was closed",
+                        dispatched_invoke_id,
+                    ))
+                }
+            },
         };
 
-        // Validate the incoming reply.  The reader thread already made sure that
+        // Validate the incoming reply. The reader thread already made sure that
         // it is consistent and addressed to us.
 
         // The source netid/port must match what we sent.
-        if reply[14..22] != request[6..14] {
-            return Err(Error::Reply(cmd.action(), "unexpected source address", 0));
+        if (resp_header.src_netid, resp_header.src_port.get()) != (target.netid(), target.port()) {
+            return Err(Error::Reply(cmd.action(), "response wasn't from commanded target", 0));
         }
-        // Read the other fields we need.
-        assert!(reply.len() >= AMS_HEADER_SIZE);
-        let mut ptr = &reply[22..];
-        let ret_cmd = ptr.read_u16::<LE>().expect("size");
-        let state_flags = ptr.read_u16::<LE>().expect("size");
-        let data_len = ptr.read_u32::<LE>().expect("size");
-        let error_code = ptr.read_u32::<LE>().expect("size");
-        let response_invoke_id = ptr.read_u32::<LE>().expect("size");
-        let result = if reply.len() >= AMS_HEADER_SIZE + 4 {
-            ptr.read_u32::<LE>().expect("size")
-        } else {
-            0 // this must be because an error code is already set
-        };
 
         // Command must match.
-        if ret_cmd != cmd as u16 {
-            return Err(Error::Reply(cmd.action(), "unexpected command", ret_cmd.into()));
+        if resp_header.command != cmd as u16 {
+            return Err(Error::Reply(cmd.action(), "unexpected command", resp_header.command.into()));
         }
+
         // State flags must be "4 | 1".
-        if state_flags != 5 {
-            return Err(Error::Reply(cmd.action(), "unexpected state flags", state_flags.into()));
+        if resp_header.state_flags != 5 {
+            return Err(Error::Reply(
+                cmd.action(),
+                "unexpected state flags",
+                resp_header.state_flags.into(),
+            ));
         }
+
         // Invoke ID must match what we sent.
-        if response_invoke_id != dispatched_invoke_id {
-            return Err(Error::Reply(cmd.action(), "unexpected invoke ID", response_invoke_id));
+        if resp_header.invoke_id != dispatched_invoke_id {
+            return Err(Error::Reply(cmd.action(), "unexpected invoke ID", resp_header.invoke_id.get()));
         }
+
         // Check error code in AMS header.
-        if error_code != 0 {
-            return ads_error(cmd.action(), error_code);
+        if resp_header.error_code != 0 {
+            return ads_error(cmd.action(), resp_header.error_code.get());
         }
+
+        let result = LE::read_u32(&resp_buf[..4]);
+
         // Check result field in payload, only relevant if error_code == 0.
         if result != 0 {
             return ads_error(cmd.action(), result);
         }
 
         // If we don't want return data, we're done.
-        if data_out.is_empty() {
-            let _ = self.buf_send.send(reply);
+        if result_bufs.is_empty() {
             return Ok(0);
         }
 
         // Check returned length, it needs to fill at least the first data_out
-        // buffer.  This also ensures that we had a result field.
-        if (data_len as usize) < data_out[0].len() + 4 {
-            return Err(Error::Reply(cmd.action(), "got less data than expected", data_len));
+        // buffer. This also ensures that we had a result field.
+        if resp_buf.len() < result_bufs[0].len() + 4 {
+            return Err(Error::Reply(cmd.action(), "got less data than expected", resp_buf.len() as u32));
         }
 
-        // The pure user data length, without the result field.
-        let data_len = data_len as usize - 4;
+        let resp_buf = &resp_buf[4..];
 
         // Distribute the data into the user output buffers, up to the returned
         // data length.
-        let mut offset = AMS_HEADER_SIZE + 4;
-        let mut rest_len = data_len;
-        for buf in data_out {
+        let mut taken = 0;
+        let mut rest_len = resp_buf.len();
+        for buf in result_bufs {
             let n = buf.len().min(rest_len);
-            buf[..n].copy_from_slice(&reply[offset..][..n]);
-            offset += n;
+            let b = &resp_buf[taken..taken + n];
+            buf[..n].copy_from_slice(b);
+            taken += n;
             rest_len -= n;
             if rest_len == 0 {
                 break;
             }
         }
 
-        // Send back the Vec buffer to the reader thread.
-        let _ = self.buf_send.send(reply);
-
         // Return either the error or the length of data.
-        Ok(data_len)
+        Ok(resp_buf.len())
     }
 }
 
 // Implementation detail: reader thread that takes replies and notifications
 // and distributes them accordingly.
-struct Reader {
+#[derive(Debug)]
+struct ClientWorker {
     socket: TcpStream,
-    source: [u8; 8],
-    buf_recv: Receiver<Vec<u8>>,
-    reply_send: Sender<Result<Vec<u8>>>,
-    notif_send: Sender<notif::Notification>,
+    source: AmsAddr,
+    pending: PendingMap,
+    handles: Option<JoinHandle<Result<()>>>,
 }
 
-impl Reader {
-    fn run(mut self) {
-        self.run_inner();
-        // We can't do much here.  But try to shut down the socket so that
-        // the main client can't be used anymore either.
-        let _ = self.socket.shutdown(Shutdown::Both);
+impl ClientWorker {
+    fn start(&mut self, mut notif_tx: Sender<notif::Notification>) {
+        let pending = self.pending.clone();
+        let source = self.source.clone();
+        let mut socket = self.socket.try_clone().expect("socket cloning failed");
+
+        let rx_worker = std::thread::spawn(move || {
+            let result = Self::reader_work(source, pending.clone(), &mut socket, &mut notif_tx);
+
+            let _ = socket.shutdown(Shutdown::Both);
+
+            let _ = pending.write().map(|mut pending| {
+                let keys = pending.keys().cloned().collect_vec();
+                for key in keys {
+                    if let Some(channel) = pending.remove(&key) {
+                        let _ = channel.send(None);
+                    };
+                }
+            });
+
+            return result;
+        });
+
+        let _ = self.handles.insert(rx_worker);
     }
 
-    fn run_inner(&mut self) {
+    fn stop(&mut self) -> Option<Result<()>> {
+        let _ = self.socket.shutdown(Shutdown::Both);
+
+        if let Some(rx_worker) = self.handles.take() {
+            Some(rx_worker.join().expect("receiver thread couldn't be joined"))
+        } else {
+            None
+        }
+    }
+}
+
+impl ClientWorker {
+    fn reader_work(
+        source: AmsAddr, pending: PendingMap, socket_rx: &mut TcpStream,
+        notif_tx: &mut Sender<notif::Notification>,
+    ) -> Result<()> {
         loop {
-            // Get a buffer from the free-channel or create a new one.
-            let mut buf = self
-                .buf_recv
-                .try_recv()
-                .unwrap_or_else(|_| Vec::with_capacity(DEFAULT_BUFFER_SIZE));
+            let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            // Read a header from the socket.
-            buf.resize(TCP_HEADER_SIZE, 0);
-            if self.socket.read_exact(&mut buf).ctx("reading AMS packet header").is_err() {
-                // Not sending an error back; we don't know if something was
-                // requested or the socket was just closed from either side.
-                return;
+            if let e @ Err(_) = socket_rx.read_exact(&mut ads_header_buf[..6]).ctx("receiving AMS/TCP header")
+            {
+                return e;
             }
 
-            // Read the rest of the packet.
-            let packet_length = LE::read_u32(&buf[2..6]) as usize;
-            buf.resize(TCP_HEADER_SIZE + packet_length, 0);
-            if let Err(e) = self.socket.read_exact(&mut buf[6..]).ctx("reading rest of packet") {
-                let _ = self.reply_send.send(Err(e));
-                return;
-            }
+            let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
-            // Is it something other than an ADS command packet?
-            let ams_cmd = LE::read_u16(&buf);
-            if ams_cmd != 0 {
-                // if it's a known packet type, continue
-                if matches!(ams_cmd, 1 | 4096 | 4097 | 4098) {
+            let ads_header = match packet_len {
+                0..=31 => {
+                    let mut discard = [0u8; 31];
+
+                    if let e @ Err(_) = socket_rx
+                        .read_exact(&mut discard[..packet_len as usize])
+                        .ctx("discarding bad data")
+                    {
+                        return e;
+                    }
+
                     continue;
                 }
-                let _ = self.reply_send.send(Err(Error::Reply(
-                    "reading packet",
-                    "invalid packet or unknown AMS command",
-                    ams_cmd as _,
-                )));
-                return;
+
+                _ => {
+                    if let e @ Err(_) =
+                        socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")
+                    {
+                        return e;
+                    }
+
+                    match AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
+                        .map_err(|_| std::io::ErrorKind::InvalidData.into())
+                        .ctx("decoding AMS header")
+                    {
+                        e @ Err(_) => return e.map(|_| ()),
+                        Ok(header) => header,
+                    }
+                }
+            };
+
+            let payload_len = ads_header.data_length.get();
+
+            let mut payload_buf = vec![0u8; payload_len as usize];
+
+            if let e @ Err(_) = socket_rx.read_exact(&mut payload_buf).ctx("receiving Ads data payload") {
+                return e.map(|_| ());
+            }
+
+            // Reserved bytes should be well-known
+            // Anything else might be invalid data
+            match LE::read_u16(&mut ads_header_buf.as_slice()) {
+                0 => (),
+                1 | 4096..=4098 => continue,
+                unknown @ _ => {
+                    return Err(Error::Reply(
+                        "interpreting received AMS packet",
+                        "invalid packet",
+                        unknown as _,
+                    ))
+                }
             }
 
             // If the header length fields aren't self-consistent, abort the connection.
-            let rest_length = LE::read_u32(&buf[26..30]) as usize;
-            if rest_length != packet_length + TCP_HEADER_SIZE - AMS_HEADER_SIZE {
-                let _ = self
-                    .reply_send
-                    .send(Err(Error::Reply("reading packet", "inconsistent packet", 0)));
-                return;
+            if payload_len != packet_len - AMS_HEADER_SIZE as u32 {
+                return Err(Error::Reply(
+                    "interpreting received AMS packet",
+                    "AMS/TCP header and AMS header contain inconsistent data",
+                    0,
+                ));
             }
 
             // Check that the packet is meant for us.
-            if buf[6..14] != self.source {
+            if (ads_header.dest_netid, ads_header.dest_port.get()) != (source.netid(), source.port()) {
                 continue;
             }
+
+            let invoke_id = ads_header.invoke_id.get();
 
             // If it looks like a reply, send it back to the requesting thread,
             // it will handle further validation.
-            if LE::read_u16(&buf[22..24]) != Command::Notification as u16 {
-                if self.reply_send.send(Ok(buf)).is_err() {
-                    // Client must have been shut down.
-                    return;
+            if ads_header.command != Command::Notification as u16 {
+                match pending.write().expect("pending map lock poisoned").remove_entry(&invoke_id) {
+                    Some((_, tx)) => {
+                        if let Err(_) = tx.send(Some((ads_header.clone(), payload_buf))) {
+                            return Err(Error::IoSync(
+                                "settling pending request",
+                                "channel closed, couldn't dispatch response",
+                                invoke_id,
+                            ));
+                        }
+                    }
+                    _ => continue,
+                };
+            } else {
+                let notif_payload_len = LE::read_u32(&payload_buf);
+                if ads_header.state_flags != 4
+                    || ads_header.error_code != 0
+                    || notif_payload_len != payload_len - 4
+                    || notif_payload_len < 4
+                {
+                    continue;
                 }
-                continue;
-            }
 
-            // Validate notification message fields.
-            let state_flags = LE::read_u16(&buf[24..26]);
-            let error_code = LE::read_u32(&buf[30..34]);
-            let length = LE::read_u32(&buf[38..42]) as usize;
-            if state_flags != 4 || error_code != 0 || length != rest_length - 4 || length < 4 {
-                continue;
-            }
-
-            // Send the notification to whoever wants to receive it.
-            if let Ok(notif) = notif::Notification::new(buf) {
-                self.notif_send.send(notif).expect("never disconnects");
+                // Send the notification to whoever wants to receive it.
+                if let Ok(notif) =
+                    notif::Notification::new([ads_header_buf.as_slice(), &payload_buf].concat())
+                {
+                    notif_tx.send(notif).expect("never disconnects");
+                }
             }
         }
+    }
+}
+
+impl Drop for ClientWorker {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -571,6 +668,7 @@ impl Device<'_> {
             index_offset: U32::new(index_offset),
             length: U32::new(data.len().try_into()?),
         };
+
         let mut read_len = U32::new(0);
 
         self.client.communicate(
@@ -811,8 +909,10 @@ impl Device<'_> {
             r_buffers[1 + i] = req.res.as_mut_bytes();
             r_buffers[1 + nreq + i] = req.rbuf;
         }
+
         self.client
             .communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+
         // unfortunately SUMUP_READWRITE returns only the actual read bytes for each
         // request, so if there are short reads the buffers got filled wrongly
         fixup_write_read_return_buffers(requests);
@@ -905,8 +1005,10 @@ impl Device<'_> {
             w_buffers.push(req.req.as_bytes());
             r_buffers.push(req.res.as_mut_bytes());
         }
+
         self.client
             .communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+
         for req in requests {
             if let Ok(handle) = req.handle() {
                 self.client
@@ -961,8 +1063,10 @@ impl Device<'_> {
             w_buffers.push(req.req.as_bytes());
             r_buffers.push(req.res.as_mut_bytes());
         }
+
         self.client
             .communicate(Command::ReadWrite, self.addr, &w_buffers, &mut r_buffers)?;
+
         for req in requests {
             if req.ensure().is_ok() {
                 self.client
@@ -972,6 +1076,7 @@ impl Device<'_> {
                     .remove(&(self.addr, req.req.get()));
             }
         }
+
         Ok(())
     }
 }
@@ -1079,7 +1184,7 @@ impl FromStr for AdsState {
 // Structures used in communication, not exposed to user,
 // but pub(crate) for the test suite.
 
-#[derive(FromBytes, IntoBytes, Immutable, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, Debug, Clone)]
 #[repr(C)]
 pub(crate) struct AdsHeader {
     /// 0x0 - ADS command

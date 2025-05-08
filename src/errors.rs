@@ -21,6 +21,10 @@ pub enum Error {
     /// A value exceeds the allowed 32 bits for ADS.
     #[error("data length or duration exceeds 32 bits")]
     Overflow(#[from] std::num::TryFromIntError),
+
+    /// Error occurred during IO synchronization
+    #[error("failed during synchronization of an Ads request/response: {0} ({1})")]
+    IoSync(&'static str, &'static str, u32),
 }
 
 pub(crate) trait ErrContext {

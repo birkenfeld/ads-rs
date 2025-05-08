@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use byteorder::{ReadBytesExt, LE};
 
-use crate::client::AMS_HEADER_SIZE;
+use crate::client::ADS_HEADER_SIZE;
 use crate::errors::ErrContext;
 use crate::{Error, Result};
 
@@ -72,11 +72,11 @@ impl Notification {
     pub fn new(data: impl Into<Vec<u8>>) -> Result<Self> {
         // Relevant data starts at byte 42 with the number of stamps.
         let data = data.into();
-        if data.len() < AMS_HEADER_SIZE + 8 {
+        if data.len() < ADS_HEADER_SIZE + 8 {
             // header + length + #stamps
             return Err(Error::Io("parsing notification", io::ErrorKind::UnexpectedEof.into()));
         }
-        let mut ptr = &data[AMS_HEADER_SIZE + 4..];
+        let mut ptr = &data[ADS_HEADER_SIZE + 4..];
         let nstamps = ptr.read_u32::<LE>().ctx("parsing notification")?;
         for _ in 0..nstamps {
             let _timestamp = ptr.read_u64::<LE>().ctx("parsing notification")?;
