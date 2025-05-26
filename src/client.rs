@@ -252,8 +252,8 @@ impl Client {
 
         // Start the reader thread.
         let mut worker = ClientWorker {
+            source,
             socket: socket.try_clone().ctx("cloning socket")?,
-            source: source.clone(),
             pending: pending.clone(),
             handles: None,
         };
@@ -474,7 +474,7 @@ struct ClientWorker {
 impl ClientWorker {
     fn start(&mut self, mut notif_tx: Sender<notif::Notification>) {
         let pending = self.pending.clone();
-        let source = self.source.clone();
+        let source = self.source;
         let mut socket = self.socket.try_clone().expect("socket cloning failed");
 
         let rx_worker = std::thread::spawn(move || {
@@ -491,7 +491,7 @@ impl ClientWorker {
                 }
             });
 
-            return result;
+            result
         });
 
         let _ = self.handles.insert(rx_worker);
@@ -500,11 +500,11 @@ impl ClientWorker {
     fn stop(&mut self) -> Option<Result<()>> {
         let _ = self.socket.shutdown(Shutdown::Both);
 
-        if let Some(rx_worker) = self.handles.take() {
-            Some(rx_worker.join().expect("receiver thread couldn't be joined"))
-        } else {
-            None
-        }
+        self.handles
+            .take()
+            .map(|rx_worker| rx_worker.join())
+            .expect("receiver thread couldn't be joined")
+            .ok()
     }
 }
 
@@ -564,10 +564,10 @@ impl ClientWorker {
 
             // Reserved bytes should be well-known
             // Anything else might be invalid data
-            match LE::read_u16(&mut ads_header_buf.as_slice()) {
+            match LE::read_u16(ads_header_buf.as_slice()) {
                 0 => (),
                 1 | 4096..=4098 => continue,
-                unknown @ _ => {
+                unknown => {
                     return Err(Error::Reply(
                         "interpreting received AMS packet",
                         "invalid packet",
@@ -597,7 +597,7 @@ impl ClientWorker {
             if ads_header.command != Command::Notification as u16 {
                 match pending.write().expect("pending map lock poisoned").remove_entry(&invoke_id) {
                     Some((_, tx)) => {
-                        if let Err(_) = tx.send(Some((ads_header.clone(), payload_buf))) {
+                        if tx.send(Some((ads_header.clone(), payload_buf))).is_err() {
                             return Err(Error::IoSync(
                                 "settling pending request",
                                 "channel closed, couldn't dispatch response",
