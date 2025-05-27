@@ -1,12 +1,13 @@
 //! Reproduces the functionality of "adstool" from the Beckhoff ADS C++ library.
 
 use std::convert::TryInto;
-use std::io::{stdin, stdout, Read, Write};
+use std::io::{self, stdin, stdout, Read, Write};
 use std::str::FromStr;
+use std::time::Duration;
 
 use byteorder::{ByteOrder, WriteBytesExt, BE, LE};
 use chrono::{DateTime, Utc};
-use clap::{AppSettings, ArgGroup, Parser, Subcommand};
+use clap::{AppSettings, ArgGroup, Args, Parser, Subcommand};
 use itertools::Itertools;
 use parse_int::parse;
 use quick_xml::{events::Event, name::QName};
@@ -16,13 +17,22 @@ use strum::EnumString;
 #[clap(disable_help_subcommand = true)]
 #[clap(global_setting = AppSettings::DeriveDisplayOrder)]
 /// A utility for managing ADS servers.
-struct Args {
+struct Cli {
     #[clap(subcommand)]
     cmd: Cmd,
-    /// If true, automatically try to set a route with the default password
-    /// before connecting.
+
+    /// Attempt to automatically create a temporary route on the remote machine if the initial
+    /// connection fails
     #[clap(short, long)]
     autoroute: bool,
+
+    /// Sets the ADS client's timeouts. Defaults to 1 sec.
+    #[clap(short, long, default_value_t = 1)]
+    timeout: u64,
+
+    #[clap(flatten)]
+    credentials: CredentialArgs,
+
     /// Target for the command.
     ///
     /// This can be `hostname[:port]` or include an AMS address using
@@ -41,6 +51,19 @@ struct Args {
     /// to the system service, `license` to the license service, while `raw and
     /// `var` default to the first PLC instance (port 851).
     target: Target,
+}
+
+impl Cli {
+    pub fn credentials(&self) -> (Option<&'_ str>, Option<&'_ str>) {
+        let username = self.credentials.username.as_deref();
+        let password = self.credentials.password.as_deref();
+
+        (username, password)
+    }
+
+    pub fn timeout(&self) -> ads::Timeouts {
+        ads::Timeouts { connect: Some(Duration::from_secs(self.timeout)), ..Default::default() }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -72,6 +95,17 @@ enum RouteAction {
     List,
 }
 
+#[derive(Debug, Args, Clone)]
+struct CredentialArgs {
+    /// username for logging into the system (defaults to `Administrator`)
+    #[clap(long)]
+    username: Option<String>,
+
+    /// password for logging into the system (defaults to `1`)
+    #[clap(long)]
+    password: Option<String>
+}
+
 #[derive(Parser, Debug)]
 struct AddRouteArgs {
     /// hostname or IP address of the route's destionation
@@ -83,14 +117,6 @@ struct AddRouteArgs {
     /// name of the new route (defaults to `addr`)
     #[clap(long)]
     routename: Option<String>,
-
-    /// password for logging into the system (defaults to `1`)
-    #[clap(long, default_value = "1")]
-    password: String,
-
-    /// username for logging into the system (defaults to `Administrator`)
-    #[clap(long, default_value = "Administrator")]
-    username: String,
 
     /// mark route as temporary?
     #[clap(long)]
@@ -172,6 +198,7 @@ enum RawAction {
         #[clap(long)]
         hex: bool,
     },
+
     /// Write some data to an index.  Data is read from stdin.
     Write {
         /// the index group, can be 0xABCD
@@ -181,6 +208,7 @@ enum RawAction {
         #[clap(parse(try_from_str = parse))]
         index_offset: u32,
     },
+
     /// Write some data (read from stdin), then read data from an index.
     #[clap(group = ArgGroup::with_name("spec").required(true))]
     WriteRead {
@@ -210,11 +238,13 @@ enum VarAction {
         /// a filter for the returned symbol names
         filter: Option<String>,
     },
+
     /// List type definitions.
     ListTypes {
         /// a filter for the returned symbol names
         filter: Option<String>,
     },
+
     /// Read a variable by name.
     #[clap(group = ArgGroup::with_name("spec"))]
     Read {
@@ -230,6 +260,7 @@ enum VarAction {
         #[clap(long)]
         hex: bool,
     },
+
     /// Write a variable by name.  If --type is given, the new value
     /// is converted from the command line argument.  If not, the new
     /// value is read as raw data from stdin.
@@ -316,7 +347,7 @@ impl FromStr for Target {
 }
 
 fn main() {
-    let args = Args::from_args();
+    let args = Cli::from_args();
 
     if let Err(e) = main_inner(args) {
         eprintln!("Error: {e}");
@@ -334,62 +365,80 @@ enum Error {
     Str(String),
 }
 
-fn connect(
-    target: Target, autoroute: bool, defport: ads::AmsPort,
-) -> ads::Result<(ads::Client, ads::AmsAddr)> {
+fn connect(port: ads::AmsPort, args: &Cli) -> ads::Result<(ads::Client, ads::AmsAddr)> {
+    let target = &args.target;
     let target_netid = match target.netid {
         Some(netid) => netid,
         None => ads::udp::get_netid((target.host.as_str(), ads::UDP_PORT))?,
     };
     let tcp_addr = (target.host.as_str(), target.port.unwrap_or(ads::PORT));
-    let amsport = target.amsport.unwrap_or(defport);
+    let amsport = target.amsport.unwrap_or(port);
     let amsaddr = ads::AmsAddr::new(target_netid, amsport);
     let source = if matches!(target.host.as_str(), "127.0.0.1" | "localhost") {
         ads::Source::Request
     } else {
-        ads::Source::Auto
+        ads::Source::Any
     };
-    let client = ads::Client::new(tcp_addr, ads::Timeouts::none(), source)?;
-    if autoroute {
-        if let Err(ads::Error::Io(..)) = client.device(amsaddr).get_info() {
-            println!("Device info failed, trying to set a route...");
-            let ip = client.source().netid().0;
-            let ip = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-            ads::udp::add_route(
-                (target.host.as_str(), ads::UDP_PORT),
-                client.source().netid(),
-                &ip,
-                None,
-                None,
-                None,
-                true,
-            )?;
-            return connect(target, false, defport);
+
+    // timeout here to prevent the remote machine allowing the connection but not responding
+    // (probably because of a bad route)
+    let client = ads::Client::new(tcp_addr, args.timeout(), source)?;
+
+    if args.autoroute {
+        let (username, password) = args.credentials();
+
+        match client.device(amsaddr).get_info() {
+            Err(e) => {
+                println!("Error connecting to client: (error: '{e}')");
+                println!("Attempting to autoroute");
+
+                let [a, b, c, d, ..] = client.source().netid().0;
+                let ip = format!("{a}.{b}.{c}.{d}");
+
+                ads::udp::add_route(
+                    (target.host.as_str(), ads::UDP_PORT),
+                    client.source().netid(),
+                    &ip,
+                    None,
+                    username,
+                    password,
+                    true,
+                )?;
+
+                return connect(port, args);
+            }
+
+            _ => ()
         }
     }
+
     Ok((client, amsaddr))
 }
 
-fn main_inner(args: Args) -> Result<(), Error> {
+fn main_inner(args: Cli) -> Result<(), Error> {
     let udp_addr = (args.target.host.as_str(), args.target.port.unwrap_or(ads::UDP_PORT));
-    match args.cmd {
+    let (username, password) = args.credentials();
+
+    match &args.cmd {
         Cmd::Route(RouteAction::Add(subargs)) => {
             ads::udp::add_route(
                 udp_addr,
                 subargs.netid,
                 &subargs.addr,
                 subargs.routename.as_deref(),
-                Some(&subargs.username),
-                Some(&subargs.password),
+                username,
+                password,
                 subargs.temporary,
             )?;
+
             println!("Success.");
         }
+
         Cmd::Route(RouteAction::List) => {
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let (client, amsaddr) = connect(ads::ports::SYSTEM_SERVICE, &args)?;
             let dev = client.device(amsaddr);
             let mut routeinfo = [0; 2048];
-            println!("{:-20} {:-22} {:-18} Flags", "Name", "NetID", "Host/IP");
+            println!("{:-20} {:-22} {:-18} Flags", "Name", "NetID", "Host IP");
             for subindex in 0.. {
                 match dev.read(ads::index::ROUTE_LIST, subindex, &mut routeinfo) {
                     Err(ads::Error::Ads(_, _, 0x716)) => break,
@@ -419,6 +468,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
             }
         }
+
         Cmd::Info => {
             let info = ads::udp::get_info(udp_addr)?;
             println!("NetID: {}", info.netid);
@@ -435,8 +485,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 println!("Fingerprint: {}", info.fingerprint);
             }
         }
+
         Cmd::TargetDesc => {
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let (client, amsaddr) = connect(ads::ports::SYSTEM_SERVICE, &args)?;
             let dev = client.device(amsaddr);
             let mut xml = [0; 2048];
             dev.read(ads::index::TARGET_DESC, 1, &mut xml)?;
@@ -469,9 +520,10 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let n = dev.read(ads::index::TARGET_DESC, 7, &mut xml)?;
             println!("Project name: {}", String::from_utf8_lossy(&xml[..n - 1]));
         }
+
         Cmd::File(subargs) => {
             use ads::file;
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let (client, amsaddr) = connect(ads::ports::SYSTEM_SERVICE, &args)?;
             let dev = client.device(amsaddr);
             match subargs {
                 FileAction::List { path } => {
@@ -485,24 +537,28 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         );
                     }
                 }
+
                 FileAction::Read { path } => {
                     let mut file =
-                        file::File::open(dev, &path, file::READ | file::BINARY | file::ENSURE_DIR)?;
+                        file::File::open(dev, path, file::READ | file::BINARY | file::ENSURE_DIR)?;
                     std::io::copy(&mut file, &mut stdout())?;
                 }
+
                 FileAction::Write { path, append } => {
-                    let flag = if append { ads::file::APPEND } else { ads::file::WRITE };
+                    let flag = if *append { ads::file::APPEND } else { ads::file::WRITE };
                     let mut file =
-                        file::File::open(dev, &path, flag | file::BINARY | file::PLUS | file::ENSURE_DIR)?;
+                        file::File::open(dev, path, flag | file::BINARY | file::PLUS | file::ENSURE_DIR)?;
                     std::io::copy(&mut stdin(), &mut file)?;
                 }
+
                 FileAction::Delete { path } => {
                     file::File::delete(dev, path, file::ENABLE_DIR)?;
                 }
             }
         }
+
         Cmd::State(subargs) => {
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let (client, amsaddr) = connect(ads::ports::SYSTEM_SERVICE, &args)?;
             let dev = client.device(amsaddr);
             let info = dev.get_info()?;
             println!("Device: {} {}.{}.{}", info.name, info.major, info.minor, info.version);
@@ -513,9 +569,10 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 dev.write_control(newstate, dev_state)?;
             }
         }
+
         Cmd::License(object) => {
             // Connect to the selected target, defaulting to the license server.
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::LICENSE_SERVER)?;
+            let (client, amsaddr) = connect(ads::ports::LICENSE_SERVER, &args)?;
             let dev = client.device(amsaddr);
             match object {
                 LicenseAction::Platformid => {
@@ -523,16 +580,19 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     dev.read_exact(ads::index::LICENSE, 2, &mut id)?;
                     println!("{}", u16::from_le_bytes(id));
                 }
+
                 LicenseAction::Systemid => {
                     let mut id = [0; 16];
                     dev.read_exact(ads::index::LICENSE, 1, &mut id)?;
                     println!("{}", format_guid(&id));
                 }
+
                 LicenseAction::Volumeno => {
                     let mut no = [0; 4];
                     dev.read_exact(ads::index::LICENSE, 5, &mut no)?;
                     println!("{}", u32::from_le_bytes(no));
                 }
+
                 LicenseAction::Modules => {
                     // Read the number of modules.
                     let mut count = [0; 4];
@@ -562,54 +622,59 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
             }
         }
+
         Cmd::Raw(subargs) => {
             // Connect to the selected target, defaulting to the first PLC instance.
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
+            let (client, amsaddr) = connect(ads::ports::TC3_PLC_SYSTEM1, &args)?;
             let dev = client.device(amsaddr);
 
             match subargs {
                 RawAction::Read { index_group, index_offset, length, r#type, hex } => {
                     if let Some(length) = length {
-                        let mut read_data = vec![0; length];
-                        let nread = dev.read(index_group, index_offset, &mut read_data)?;
-                        if hex {
+                        let mut read_data = vec![0; *length];
+                        let nread = dev.read(*index_group, *index_offset, &mut read_data)?;
+                        if *hex {
                             hexdump(&read_data[..nread]);
                         } else {
                             stdout().write_all(&read_data[..nread])?;
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        dev.read_exact(index_group, index_offset, &mut read_data)?;
-                        print_read_value(typ, &read_data, hex);
+                        dev.read_exact(*index_group, *index_offset, &mut read_data)?;
+                        print_read_value(*typ, &read_data, *hex);
                     }
                 }
+
                 RawAction::Write { index_group, index_offset } => {
                     let mut write_data = Vec::new();
                     stdin().read_to_end(&mut write_data)?;
-                    dev.write(index_group, index_offset, &write_data)?;
+                    dev.write(*index_group, *index_offset, &write_data)?;
                 }
+
                 RawAction::WriteRead { index_group, index_offset, length, r#type, hex } => {
                     let mut write_data = Vec::new();
                     stdin().read_to_end(&mut write_data)?;
+
                     if let Some(length) = length {
-                        let mut read_data = vec![0; length];
-                        let nread = dev.write_read(index_group, index_offset, &write_data, &mut read_data)?;
-                        if hex {
+                        let mut read_data = vec![0; *length];
+                        let nread = dev.write_read(*index_group, *index_offset, &write_data, &mut read_data)?;
+                        if *hex {
                             hexdump(&read_data[..nread]);
                         } else {
                             stdout().write_all(&read_data[..nread])?;
                         }
                     } else if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
-                        dev.write_read_exact(index_group, index_offset, &write_data, &mut read_data)?;
-                        print_read_value(typ, &read_data, hex);
+                        dev.write_read_exact(*index_group, *index_offset, &write_data, &mut read_data)?;
+                        print_read_value(*typ, &read_data, *hex);
                     }
                 }
             }
         }
+
         Cmd::Var(subargs) => {
             // Connect to the selected target, defaulting to the first PLC instance.
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
+            let (client, amsaddr) = connect(ads::ports::TC3_PLC_SYSTEM1, &args)?;
             let dev = client.device(amsaddr);
 
             fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32, typ: &str, level: usize) {
@@ -625,6 +690,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                             field.typ,
                             39 - 2 * level
                         );
+
                         print_fields(type_map, base_offset + offset, &field.typ, level + 1);
                     }
                 }
@@ -633,7 +699,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             match subargs {
                 VarAction::List { filter } => {
                     let (symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
-                    let filter = filter.unwrap_or_default().to_lowercase();
+                    let filter = filter.as_ref().map(|s| s.as_str()).unwrap_or("").to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
                             println!(
@@ -644,9 +710,10 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     }
                 }
+
                 VarAction::ListTypes { filter } => {
                     let (_symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
-                    let filter = filter.unwrap_or_default().to_lowercase();
+                    let filter = filter.as_ref().map(|s| s.as_str()).unwrap_or("").to_lowercase();
                     for (name, ty) in &type_map {
                         if name.to_lowercase().contains(&filter) {
                             println!("**          ({:6x}) {:40}", ty.size, name);
@@ -654,30 +721,32 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     }
                 }
+
                 VarAction::Read { name, r#type, length, hex } => {
-                    let handle = ads::symbol::Handle::new(dev, &name)?;
+                    let handle = ads::symbol::Handle::new(dev, name)?;
                     if let Some(typ) = r#type {
                         let mut read_data = vec![0; typ.size()];
                         handle.read(&mut read_data)?;
-                        print_read_value(typ, &read_data, hex);
+                        print_read_value(*typ, &read_data, *hex);
                     } else {
                         let length = match length {
-                            Some(l) => l,
-                            None => ads::symbol::get_size(dev, &name)?,
+                            Some(l) => *l,
+                            None => ads::symbol::get_size(dev, name)?,
                         };
                         let mut read_data = vec![0; length];
                         handle.read(&mut read_data)?;
-                        if hex {
+                        if *hex {
                             hexdump(&read_data);
                         } else {
                             stdout().write_all(&read_data)?;
                         }
                     }
                 }
+
                 VarAction::Write { name, value, r#type } => {
-                    let handle = ads::symbol::Handle::new(dev, &name)?;
+                    let handle = ads::symbol::Handle::new(dev, name)?;
                     if let Some(typ) = r#type {
-                        let write_data = get_write_value(typ, value.unwrap())?;
+                        let write_data = get_write_value(*typ, value.as_ref().map(|s| s.as_str()).unwrap())?;
                         handle.write(&write_data)?;
                     } else {
                         let mut write_data = Vec::new();
@@ -687,12 +756,13 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
             }
         }
+
         Cmd::Exec(subargs) => {
-            let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::SYSTEM_SERVICE)?;
+            let (client, amsaddr) = connect(ads::ports::SYSTEM_SERVICE, &args)?;
             let dev = client.device(amsaddr);
 
             let workingdir = subargs.workingdir.as_deref().unwrap_or("");
-            let args = subargs.args.into_iter().join(" ");
+            let args = subargs.args.iter().join(" ");
 
             let mut data = Vec::new();
             data.write_u32::<LE>(subargs.program.len() as u32).unwrap();
@@ -708,14 +778,15 @@ fn main_inner(args: Args) -> Result<(), Error> {
             dev.write(ads::index::EXECUTE, 0, &data)?;
         }
     }
+
     Ok(())
 }
 
-fn get_write_value(typ: VarType, value: String) -> Result<Vec<u8>, Error> {
+fn get_write_value(typ: VarType, value: &str) -> Result<Vec<u8>, Error> {
     let err = |_| Error::Str("expected integer".into());
     let float_err = |_| Error::Str("expected floating point number".into());
     Ok(match typ {
-        VarType::String => value.into_bytes(),
+        VarType::String => value.as_bytes().to_vec(),
         VarType::Bool => {
             if value == "TRUE" {
                 vec![1]
@@ -725,14 +796,14 @@ fn get_write_value(typ: VarType, value: String) -> Result<Vec<u8>, Error> {
                 return Err(Error::Str("invalid BOOL value".into()));
             }
         }
-        VarType::Byte => parse::<u8>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Sint => parse::<i8>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Word => parse::<u16>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Int => parse::<i16>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Dword => parse::<u32>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Dint => parse::<i32>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Lword => parse::<u64>(&value).map_err(err)?.to_le_bytes().into(),
-        VarType::Lint => parse::<i64>(&value).map_err(err)?.to_le_bytes().into(),
+        VarType::Byte => parse::<u8>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Sint => parse::<i8>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Word => parse::<u16>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Int => parse::<i16>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Dword => parse::<u32>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Dint => parse::<i32>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Lword => parse::<u64>(value).map_err(err)?.to_le_bytes().into(),
+        VarType::Lint => parse::<i64>(value).map_err(err)?.to_le_bytes().into(),
         VarType::Real => value.parse::<f32>().map_err(float_err)?.to_le_bytes().into(),
         VarType::Lreal => value.parse::<f64>().map_err(float_err)?.to_le_bytes().into(),
     })

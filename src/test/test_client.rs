@@ -10,7 +10,7 @@ use crate::{AmsAddr, AmsNetId, Client, Device, Error, Source, Timeouts};
 fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
     let timeouts = if let Some(tmo) = opts.timeout { Timeouts::new(tmo) } else { Timeouts::none() };
     let port = config_test_server(opts);
-    let client = Client::new(("127.0.0.1", port), timeouts, Source::Auto).unwrap();
+    let client = Client::new(("127.0.0.1", port), timeouts, Source::Any).unwrap();
     f(client.device(AmsAddr::new(AmsNetId::new(1, 2, 3, 4, 5, 6), 851)));
 }
 

@@ -17,7 +17,7 @@ fn dumb() {
 
 fn with_client() {
     let timeout = ads::Timeouts::new(std::time::Duration::from_secs(1));
-    let client = ads::Client::new("127.0.0.1:48999", timeout, ads::Source::Auto).unwrap();
+    let client = ads::Client::new("127.0.0.1:48999", timeout, ads::Source::Any).unwrap();
     let dev = client.device(ads::AmsAddr::new([1, 2, 3, 4, 5, 6].into(), 851));
     let mut data = [0; 4];
     let now = std::time::Instant::now();

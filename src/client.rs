@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 use std::io::{Read, Write};
 use std::mem::size_of;
-use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -55,7 +55,7 @@ pub enum Command {
 }
 
 impl Command {
-    fn action(self) -> &'static str {
+    const fn action(self) -> &'static str {
         match self {
             Command::DevInfo => "get device info",
             Command::Read => "read data",
@@ -78,7 +78,7 @@ pub(crate) const ADS_HEADER_SIZE: usize = AMS_TCP_HEADER_SIZE + AMS_HEADER_SIZE;
 
 /// Holds the different timeouts that will be used by the Client.
 /// None means no timeout in every case.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Timeouts {
     /// Connect timeout
     pub connect: Option<Duration>,
@@ -90,25 +90,32 @@ pub struct Timeouts {
 
 impl Timeouts {
     /// Create a new `Timeouts` where all values are identical.
-    pub fn new(duration: Duration) -> Self {
+    pub const fn new(duration: Duration) -> Self {
         Self { connect: Some(duration), read: Some(duration), write: Some(duration) }
     }
 
     /// Create a new `Timeouts` without any timeouts specified.
-    pub fn none() -> Self {
+    pub const fn none() -> Self {
         Self { connect: None, read: None, write: None }
     }
 }
 
-/// Specifies the source AMS address to use.
+/// The method to use when acquiring the `Client`'s source AmsNetId and port
+///
+/// There are multiple valid connection configurations for connecting to a remote PLC instance.
+/// See [these docs on connections and Ads route configurations](https://jisotalo.fi/ads-client/#md:connection-setup)
 #[derive(Clone, Copy, Debug)]
 pub enum Source {
-    /// Auto-generate a source address from the local address and a random port.
-    Auto,
-    /// Use a specified source address.
+    /// Create a new AmsNetId using the IPv4 address of the network interface that was used to
+    /// connect to the remote ADS router, using port 58913
+    Any,
+
+    /// Use a pre-configured source AmsNetId
+    ///
+    /// Required for direct connections to a remote PLC instance without using a local Ads router.
     Addr(AmsAddr),
-    /// Request to open a port in the connected router and get the address from
-    /// it.  This is necessary when connecting to a local PLC on `127.0.0.1`.
+
+    /// Obtain the source AmsNetId and port from the connected router.
     Request,
 }
 
@@ -224,16 +231,18 @@ impl Client {
         let mut source_port_opened = false;
         let source = match source {
             Source::Addr(id) => id,
-            Source::Auto => {
-                let my_addr = socket.local_addr().ctx("getting local socket address")?.ip();
-                if let IpAddr::V4(ip) = my_addr {
-                    let [a, b, c, d] = ip.octets();
-                    // use some random ephemeral port
-                    AmsAddr::new(AmsNetId::new(a, b, c, d, 1, 1), 58913)
-                } else {
-                    AmsAddr::new(AmsNetId::new(127, 0, 0, 1, 1, 1), 58913)
-                }
+
+            Source::Any => {
+                let local_addr = socket.local_addr().ctx("getting local socket address")?.ip();
+                let local_ip = match local_addr {
+                    IpAddr::V4(ip) => ip,
+                    IpAddr::V6(ip) => ip.to_ipv4().unwrap_or(Ipv4Addr::new(127, 0, 0, 1))
+                };
+
+                // use an abitrary port
+                (AmsNetId::from_ip(local_ip, 1, 1), 58913).into()
             }
+
             Source::Request => {
                 let request_port_msg = [0, 16, 2, 0, 0, 0, 0, 0];
                 let mut reply = [0; 14];
@@ -564,7 +573,7 @@ impl ClientReceiver {
             // Anything else might be invalid data
             match LE::read_u16(ads_header_buf.as_slice()) {
                 0 => (),
-                1 | 4096..=4098 => continue,
+                1 | 4096..=4099 => continue,
                 unknown => {
                     return Err(Error::Reply(
                         "interpreting received AMS packet",
@@ -1197,6 +1206,7 @@ pub(crate) struct AdsHeader {
     /// 0x1000 - open port
     /// 0x1001 - note from router (router state changed)
     /// 0x1002 - get local netid
+    /// 0x1003 - get runtime type (for PLC structures maybe?)
     pub ams_cmd: u16,
     pub length: U32,
     pub dest_netid: AmsNetId,

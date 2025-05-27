@@ -23,27 +23,30 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 #[repr(C)]
 pub struct AmsNetId(pub [u8; 6]);
 
-/// An AMS port is, similar to an IP port, a 16-bit integer.
+/// A unsigned 16-bit integer used to identify an ADS device associated with an ADS router.
+///
+/// An AMS port is similar to an TCP/UDP port, but does not influence the underlying TCP socket
+/// configuration.
 pub type AmsPort = u16;
 
 impl AmsNetId {
     /// Create a NetID from six bytes.
     pub const fn new(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8) -> Self {
-        AmsNetId([a, b, c, d, e, f])
+        Self([a, b, c, d, e, f])
     }
 
     /// Return the "local NetID", `127.0.0.1.1.1`.
     pub const fn local() -> Self {
-        AmsNetId([127, 0, 0, 1, 1, 1])
+        Self([127, 0, 0, 1, 1, 1])
     }
 
     /// Create a NetID from a slice (which must have length 6).
     pub fn from_slice(slice: &[u8]) -> Option<Self> {
-        Some(AmsNetId(slice.try_into().ok()?))
+        Some(Self(slice.try_into().ok()?))
     }
 
     /// Create a NetID from an IPv4 address and two additional octets.
-    pub fn from_ip(ip: Ipv4Addr, e: u8, f: u8) -> Self {
+    pub const fn from_ip(ip: Ipv4Addr, e: u8, f: u8) -> Self {
         let [a, b, c, d] = ip.octets();
         Self::new(a, b, c, d, e, f)
     }
@@ -60,7 +63,7 @@ impl FromStr for AmsNetId {
     /// Parse a NetID from a string (`a.b.c.d.e.f`).
     ///
     /// Bytes can be missing in the end; missing bytes are substituted by 1.
-    fn from_str(s: &str) -> Result<AmsNetId, &'static str> {
+    fn from_str(s: &str) -> Result<Self, &'static str> {
         let mut arr = [1; 6];
         for (i, part) in s.split('.').enumerate() {
             match (arr.get_mut(i), part.parse()) {
@@ -68,7 +71,7 @@ impl FromStr for AmsNetId {
                 _ => return Err("invalid NetID string"),
             }
         }
-        Ok(AmsNetId(arr))
+        Ok(Self(arr))
     }
 }
 
@@ -81,7 +84,12 @@ impl From<[u8; 6]> for AmsNetId {
 impl Display for AmsNetId {
     /// Format a NetID in the usual format.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0.iter().format("."))
+        let id_str = self.0.iter().format(".");
+        if f.precision().is_none() && f.width().is_none() {
+            write!(f, "{}", id_str)
+        } else {
+            f.pad(&id_str.to_string())
+        }
     }
 }
 
@@ -117,6 +125,12 @@ impl AmsAddr {
         r.read_exact(&mut netid)?;
         let port = r.read_u16::<LE>()?;
         Ok(Self(AmsNetId(netid), port))
+    }
+}
+
+impl From<(AmsNetId, u16)> for AmsAddr {
+    fn from(value: (AmsNetId, u16)) -> Self {
+        Self(value.0, value.1)
     }
 }
 
