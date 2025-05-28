@@ -106,9 +106,9 @@ impl Timeouts {
 /// See [these docs on connections and Ads route configurations](https://jisotalo.fi/ads-client/#md:connection-setup)
 #[derive(Clone, Copy, Debug)]
 pub enum Source {
-    /// Create a new AmsNetId using the IPv4 address of the network interface that was used to
-    /// connect to the remote ADS router, using port 58913
-    Any,
+    #[deprecated(note = "Use `ads::Source::Any`")]
+    /// The `Source::Auto` variant is deprecated, use `Source::Any` instead
+    Auto,
 
     /// Use a pre-configured source AmsNetId
     ///
@@ -117,6 +117,10 @@ pub enum Source {
 
     /// Obtain the source AmsNetId and port from the connected router.
     Request,
+
+    /// Create a new AmsNetId using the IPv4 address of the network interface that was used to
+    /// connect to the remote ADS router, using port 58913
+    Any,
 }
 
 /// Represents a connection to a ADS server.
@@ -179,29 +183,39 @@ impl Drop for Client {
 impl Client {
     /// Open a new connection to an ADS server.
     ///
-    /// If connecting to a server that has an AMS router, it needs to have a
-    /// route set for the source IP and NetID, otherwise the connection will be
-    /// closed immediately.  The route can be added from TwinCAT, or this
-    /// crate's `udp::add_route` helper can be used to add a route via UDP
-    /// message.
+    /// If connecting to a remote machine, a route needs to be configured
+    /// between the local machine and the server.  If there is no route set,
+    /// then the behavior is undefined: the connection *may* fail immediately,
+    /// however, it's also possible that a TCP connection can be made successfully
+    /// and hang indefinitely, due to the incorrect route configuration.
+    ///
+    /// Routes can be added either from TwinCAT or dynamically via the
+    /// `ads::udp::add_route` function. When utilizing dynamic routing, ensure that
+    /// the target machine has it's firewall configured to allow connections via
+    /// UDP port 48899.
     ///
     /// `source` is the AMS address to to use as the source; the NetID needs to
-    /// match the route entry in the server.  If `Source::Auto`, the NetID is
-    /// constructed from the local IP address with .1.1 appended; if there is no
-    /// IPv4 address, `127.0.0.1.1.1` is used.
+    /// match the route entry in the server.  If specified with `Source::Any`,
+    /// the NetID is constructed from the local IP address with .1.1 appended;
+    /// if there is no IPv4 address, `127.0.0.1.1.1` is used.
     ///
     /// The AMS port of `source` is not important, as long as it is not a
     /// well-known service port; an ephemeral port number > 49152 is
-    /// recommended.  If Auto, the port is set to 58913.
+    /// recommended.  If `Source::Any` is used, the port is set to 58913.
     ///
-    /// If you are connecting to the local PLC, you need to set `source` to
-    /// `Source::Request`.  This will ask the local AMS router for a new
-    /// port and use it as the source port.
+    /// If you are connecting to the local ADS server or to a remote machine
+    /// using the local ADS router, you need to set `source` to `Source::Request`.
+    /// The router will issue an unused port number to the client, and the
+    /// client will adopt the AMS NetID of the router for communication with
+    /// the remote ADS server.
     ///
-    /// Since all communications is supposed to be handled by an ADS router,
-    /// only one TCP/ADS connection can exist between two hosts. Non-TwinCAT
-    /// clients should make sure to replicate this behavior, as opening a second
-    /// connection will close the first.
+    /// Since all communications between are supposed to be handled by an ADS router,
+    /// only one TCP/ADS connection can exist between two hosts. If the client
+    /// is connecting directly to the remote ADS router, take care to properly
+    /// configure a static route on the remote ADS router, and explicitly specify
+    /// the AMS NetID using `Source::Addr(AmsNetId, u16)` clients should make
+    /// sure to replicate this behavior, as opening a second connection will
+    /// close the first.
     pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Source) -> Result<Self> {
         // Connect, taking the timeout into account.  Unfortunately
         // connect_timeout wants a single SocketAddr.
@@ -209,34 +223,42 @@ impl Client {
             .to_socket_addrs()
             .ctx("converting address to SocketAddr")?
             .next()
-            .expect("at least one SocketAddr");
+            .ok_or(Error::Other("no destination address could be resolved"))?;
+
         let mut socket = if let Some(timeout) = timeouts.connect {
-            TcpStream::connect_timeout(&addr, timeout).ctx("connecting TCP socket with timeout")?
+            TcpStream::connect_timeout(&addr, timeout)
+                .ctx("establishing connetion to remote ADS router (with timeout)")?
         } else {
-            TcpStream::connect(addr).ctx("connecting TCP socket")?
+            TcpStream::connect(addr).ctx("establishing connection to remote ADS router")?
         };
 
         // Disable Nagle to ensure small requests are sent promptly; we're
         // playing ping-pong with request reply, so no pipelining.
-        socket.set_nodelay(true).ctx("setting NODELAY")?;
-        socket.set_write_timeout(timeouts.write).ctx("setting write timeout")?;
+        socket.set_nodelay(true).ctx("setting client socket NODELAY")?;
+        socket
+            .set_write_timeout(timeouts.write)
+            .ctx("setting client socket write timeout")?;
+        socket
+            .set_read_timeout(timeouts.read)
+            .ctx("setting client socket read timeout")?;
 
         // Determine our source AMS address.  If it's not specified, try to use
         // the socket's local IPv4 address, if it's IPv6 (not sure if Beckhoff
         // devices support that) use `127.0.0.1` as the last resort.
         //
         // If source is Request, send an AMS port open message to the connected
-        // router to get our source address.  This is required when connecting
-        // via localhost, apparently.
+        // router to get our source address. This is required when using a local
+        // ADS router (TwinCAT or AdsRouterConsole/AdsRouterWpf)
         let mut source_port_opened = false;
         let source = match source {
             Source::Addr(id) => id,
 
-            Source::Any => {
+            #[allow(deprecated)]
+            Source::Any | Source::Auto => {
                 let local_addr = socket.local_addr().ctx("getting local socket address")?.ip();
                 let local_ip = match local_addr {
                     IpAddr::V4(ip) => ip,
-                    IpAddr::V6(ip) => ip.to_ipv4().unwrap_or(Ipv4Addr::new(127, 0, 0, 1))
+                    IpAddr::V6(ip) => ip.to_ipv4().unwrap_or(Ipv4Addr::new(127, 0, 0, 1)),
                 };
 
                 // use an abitrary port
