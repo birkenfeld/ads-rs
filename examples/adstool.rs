@@ -1,7 +1,8 @@
 //! Reproduces the functionality of "adstool" from the Beckhoff ADS C++ library.
 
 use std::convert::TryInto;
-use std::io::{self, stdin, stdout, Read, Write};
+use std::io::{stdin, stdout, Read, Write};
+use std::net::{IpAddr, Ipv4Addr, TcpStream};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -61,8 +62,8 @@ impl Cli {
         (username, password)
     }
 
-    pub fn timeout(&self) -> ads::Timeouts {
-        ads::Timeouts { connect: Some(Duration::from_secs(self.timeout)), ..Default::default() }
+    pub const fn timeout(&self) -> ads::Timeouts {
+        ads::Timeouts { connect: Some(Duration::from_secs(self.timeout)), ..ads::Timeouts::none() }
     }
 }
 
@@ -103,7 +104,7 @@ struct CredentialArgs {
 
     /// password for logging into the system (defaults to `1`)
     #[clap(long)]
-    password: Option<String>
+    password: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -376,6 +377,40 @@ fn connect(port: ads::AmsPort, args: &Cli) -> ads::Result<(ads::Client, ads::Ams
     let amsaddr = ads::AmsAddr::new(target_netid, amsport);
     let source = if matches!(target.host.as_str(), "127.0.0.1" | "localhost") {
         ads::Source::Request
+    } else if args.autoroute {
+        // temp. connection to remote to get the corrent IP addr of the interface in use
+        let sock = TcpStream::connect(tcp_addr)
+            .map_err(|e| ads::Error::Io("attempting to resolve local IP address", e))?;
+
+        let local_ip = sock.local_addr()
+            .map(|addr| addr.ip())
+            .map_err(|e| ads::Error::Io("attempting to resolve local IP address", e))?;
+
+        // if not using IPv4 address or IPv6 address with IPv4 mapping,
+        // create an arbitrary AMS NetID
+        let local_net_id = {
+            let [a, b, c, d] = match local_ip {
+                IpAddr::V4(ip) => ip.octets(),
+                IpAddr::V6(ip) => ip.to_ipv4().unwrap_or(Ipv4Addr::new(1, 2, 3, 4)).octets()
+            };
+
+            ads::AmsNetId::new(a, b, c, d, 1, 1)
+        };
+
+        let (username, password) = args.credentials();
+
+        // add the route using the collected IP information and derived AMS NetID
+        ads::udp::add_route(
+            (target.host.as_str(), ads::UDP_PORT),
+            local_net_id,
+            &local_ip.to_string(),
+            None,
+            username,
+            password,
+            true,
+        )?;
+
+        ads::Source::Addr(ads::AmsAddr::new(local_net_id, 58913))
     } else {
         ads::Source::Any
     };
@@ -383,34 +418,6 @@ fn connect(port: ads::AmsPort, args: &Cli) -> ads::Result<(ads::Client, ads::Ams
     // timeout here to prevent the remote machine allowing the connection but not responding
     // (probably because of a bad route)
     let client = ads::Client::new(tcp_addr, args.timeout(), source)?;
-
-    if args.autoroute {
-        let (username, password) = args.credentials();
-
-        match client.device(amsaddr).get_info() {
-            Err(e) => {
-                println!("Error connecting to client: (error: '{e}')");
-                println!("Attempting to autoroute");
-
-                let [a, b, c, d, ..] = client.source().netid().0;
-                let ip = format!("{a}.{b}.{c}.{d}");
-
-                ads::udp::add_route(
-                    (target.host.as_str(), ads::UDP_PORT),
-                    client.source().netid(),
-                    &ip,
-                    None,
-                    username,
-                    password,
-                    true,
-                )?;
-
-                return connect(port, args);
-            }
-
-            _ => ()
-        }
-    }
 
     Ok((client, amsaddr))
 }
@@ -539,8 +546,7 @@ fn main_inner(args: Cli) -> Result<(), Error> {
                 }
 
                 FileAction::Read { path } => {
-                    let mut file =
-                        file::File::open(dev, path, file::READ | file::BINARY | file::ENSURE_DIR)?;
+                    let mut file = file::File::open(dev, path, file::READ | file::BINARY | file::ENSURE_DIR)?;
                     std::io::copy(&mut file, &mut stdout())?;
                 }
 
@@ -657,7 +663,8 @@ fn main_inner(args: Cli) -> Result<(), Error> {
 
                     if let Some(length) = length {
                         let mut read_data = vec![0; *length];
-                        let nread = dev.write_read(*index_group, *index_offset, &write_data, &mut read_data)?;
+                        let nread =
+                            dev.write_read(*index_group, *index_offset, &write_data, &mut read_data)?;
                         if *hex {
                             hexdump(&read_data[..nread]);
                         } else {
