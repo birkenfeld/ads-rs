@@ -255,7 +255,7 @@ impl Client {
             source,
             socket: socket.try_clone().ctx("cloning socket")?,
             pending: pending.clone(),
-            handles: None,
+            handle: None,
         };
 
         worker.start(notif_tx);
@@ -468,7 +468,7 @@ struct ClientWorker {
     socket: TcpStream,
     source: AmsAddr,
     pending: PendingMap,
-    handles: Option<JoinHandle<Result<()>>>,
+    handle: Option<JoinHandle<Result<()>>>,
 }
 
 impl ClientWorker {
@@ -494,17 +494,13 @@ impl ClientWorker {
             result
         });
 
-        let _ = self.handles.insert(rx_worker);
+        let _ = self.handle.insert(rx_worker);
     }
 
     fn stop(&mut self) -> Option<Result<()>> {
         let _ = self.socket.shutdown(Shutdown::Both);
 
-        self.handles
-            .take()
-            .map(|rx_worker| rx_worker.join())
-            .expect("receiver thread couldn't be joined")
-            .ok()
+        self.handle.take()?.join().ok()
     }
 }
 
