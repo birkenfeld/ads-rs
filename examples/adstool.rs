@@ -382,7 +382,8 @@ fn connect(port: ads::AmsPort, args: &Cli) -> ads::Result<(ads::Client, ads::Ams
         let sock = TcpStream::connect(tcp_addr)
             .map_err(|e| ads::Error::Io("attempting to resolve local IP address", e))?;
 
-        let local_ip = sock.local_addr()
+        let local_ip = sock
+            .local_addr()
             .map(|addr| addr.ip())
             .map_err(|e| ads::Error::Io("attempting to resolve local IP address", e))?;
 
@@ -391,7 +392,7 @@ fn connect(port: ads::AmsPort, args: &Cli) -> ads::Result<(ads::Client, ads::Ams
         let local_net_id = {
             let [a, b, c, d] = match local_ip {
                 IpAddr::V4(ip) => ip.octets(),
-                IpAddr::V6(ip) => ip.to_ipv4().unwrap_or(Ipv4Addr::new(1, 2, 3, 4)).octets()
+                IpAddr::V6(ip) => ip.to_ipv4().unwrap_or(Ipv4Addr::new(1, 2, 3, 4)).octets(),
             };
 
             ads::AmsNetId::new(a, b, c, d, 1, 1)

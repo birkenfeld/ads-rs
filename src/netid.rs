@@ -86,7 +86,7 @@ impl Display for AmsNetId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let id_str = self.0.iter().format(".");
         if f.precision().is_none() && f.width().is_none() {
-            write!(f, "{}", id_str)
+            write!(f, "{id_str}")
         } else {
             f.pad(&id_str.to_string())
         }
