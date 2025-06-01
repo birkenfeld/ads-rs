@@ -319,7 +319,7 @@ fn main() {
     let args = Args::from_args();
 
     if let Err(e) = main_inner(args) {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }
@@ -403,7 +403,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         let namelen = LE::read_u32(&routeinfo[36..]) as usize;
                         let host = String::from_utf8_lossy(&routeinfo[44..][..hostlen - 1]);
                         let name = String::from_utf8_lossy(&routeinfo[44 + hostlen..][..namelen - 1]);
-                        print!("{:-20} {:-22} {:-18}", name, netid, host);
+                        print!("{name:-20} {netid:-22} {host:-18}");
                         if flags & 0x01 != 0 {
                             print!(" temporary");
                         }
@@ -415,7 +415,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                         println!();
                     }
-                    _ => println!("Route entry {} too short", subindex),
+                    _ => println!("Route entry {subindex} too short"),
                 }
             }
         }
@@ -459,7 +459,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         }
                     }
                     Ok(Event::Eof) => break,
-                    Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {}", e))),
+                    Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {e}"))),
                     _ => (),
                 }
             }
@@ -507,9 +507,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let info = dev.get_info()?;
             println!("Device: {} {}.{}.{}", info.name, info.major, info.minor, info.version);
             let (state, dev_state) = dev.get_state()?;
-            println!("Current state: {:?}", state);
+            println!("Current state: {state:?}");
             if let Some(newstate) = subargs.target_state {
-                println!("Set new state: {:?}", newstate);
+                println!("Set new state: {newstate:?}");
                 dev.write_control(newstate, dev_state)?;
             }
         }
@@ -553,10 +553,10 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
                         println!("ID: {}", format_guid(guid));
                         if let Some(exp) = exp_time {
-                            println!("    Expires: {}", exp);
+                            println!("    Expires: {exp}");
                         }
                         if inst_total != 0 {
-                            println!("    Instances used: {}/{}", inst_used, inst_total);
+                            println!("    Instances used: {inst_used}/{inst_total}");
                         }
                     }
                 }
@@ -748,18 +748,18 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
             match buf[0] {
                 0 => println!("FALSE"),
                 1 => println!("TRUE"),
-                n => println!("non-bool ({})", n),
+                n => println!("non-bool ({n})"),
             }
             return;
         }
         VarType::Real => {
             let v = f32::from_le_bytes(buf[..4].try_into().expect("size"));
-            println!("{}", v);
+            println!("{v}");
             return;
         }
         VarType::Lreal => {
             let v = f64::from_le_bytes(buf[..8].try_into().expect("size"));
-            println!("{}", v);
+            println!("{v}");
             return;
         }
         VarType::Byte => buf[0] as i128,
@@ -773,9 +773,9 @@ fn print_read_value(typ: VarType, buf: &[u8], hex: bool) {
     };
     // Only reaches here for integer types
     if hex {
-        println!("{:#x}", value);
+        println!("{value:#x}");
     } else {
-        println!("{}", value);
+        println!("{value}");
     }
 }
 

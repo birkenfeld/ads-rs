@@ -9,7 +9,7 @@ fn main() {
     std::thread::spawn(move || {
         for msg in recv_notify.iter() {
             for sample in msg.samples() {
-                println!("notify: {:?}", sample);
+                println!("notify: {sample:?}");
             }
         }
     });
@@ -39,7 +39,7 @@ fn main() {
             ),
         )
         .unwrap();
-    println!("{} {}", h1, h2);
+    println!("{h1} {h2}");
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }

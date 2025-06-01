@@ -149,12 +149,13 @@ impl Drop for Client {
             .get_mut()
             .expect("notification handle cache lock was poisoned");
 
-        // Remove our port from the router, if necessary.
-        if self.source_port_opened {
-            let mut close_port_msg = [1, 0, 2, 0, 0, 0, 0, 0];
-            LE::write_u16(&mut close_port_msg[6..], self.source.port());
-
-            let _ = self.socket.write().map(|mut socket| socket.write_all(&close_port_msg));
+        if let Ok(ref mut socket) = self.socket.write() {
+            // Remove our port from the router, if necessary.
+            if self.source_port_opened {
+                let mut close_port_msg = [1, 0, 2, 0, 0, 0, 0, 0];
+                LE::write_u16(&mut close_port_msg[6..], self.source.port());
+                let _ = socket.write_all(&close_port_msg);
+            }
         }
 
         self.worker.stop();
@@ -482,14 +483,14 @@ impl ClientWorker {
 
             let _ = socket.shutdown(Shutdown::Both);
 
-            let _ = pending.write().map(|mut pending| {
+            if let Ok(ref mut pending) = pending.write() {
                 let keys = pending.keys().cloned().collect_vec();
                 for key in keys {
                     if let Some(channel) = pending.remove(&key) {
                         let _ = channel.send(None);
                     };
                 }
-            });
+            }
 
             result
         });

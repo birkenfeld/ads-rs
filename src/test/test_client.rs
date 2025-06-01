@@ -182,7 +182,7 @@ fn test_notification() {
         let first = chan.try_recv().unwrap();
         let second = chan.try_recv().unwrap();
 
-        println!("{:?}", first);
+        println!("{first:?}");
 
         let mut samples = first.samples();
         assert_eq!(
@@ -265,7 +265,7 @@ fn test_string_type() {
         assert!(<[u8; 5]>::from(bstr2) == [b'a', b'b', b'c', 0, 0]);
         assert!(bstr == bstr2);
 
-        assert!(format!("{:?}", bstr) == "\"abc\"");
+        assert!(format!("{bstr:?}") == "\"abc\"");
 
         device.write_value(0x4020, 7, &bstr).unwrap();
 
@@ -291,7 +291,7 @@ fn test_wstring_type() {
         assert!(WString5::try_from(&[1, 2, 3, 4, 5, 6][..]).is_err());
         assert!(WString5::try_from("abcdef").is_err());
 
-        assert!(format!("{:?}", wstr) == "\"abc\"");
+        assert!(format!("{wstr:?}") == "\"abc\"");
 
         let wstr2 = WString5::try_from(&[b'a' as u16, b'b' as u16, b'c' as u16][..]).unwrap();
         assert!(<[u16; 5]>::from(wstr2) == [b'a' as u16, b'b' as u16, b'c' as u16, 0, 0]);
