@@ -213,9 +213,7 @@ impl Client {
     /// only one TCP/ADS connection can exist between two hosts. If the client
     /// is connecting directly to the remote ADS router, take care to properly
     /// configure a static route on the remote ADS router, and explicitly specify
-    /// the AMS NetID using `Source::Addr(AmsNetId, u16)` clients should make
-    /// sure to replicate this behavior, as opening a second connection will
-    /// close the first.
+    /// the AMS NetID using `Source::Addr(AmsNetId, u16)`.
     pub fn new(addr: impl ToSocketAddrs, timeouts: Timeouts, source: Source) -> Result<Self> {
         // Connect, taking the timeout into account.  Unfortunately
         // connect_timeout wants a single SocketAddr.
