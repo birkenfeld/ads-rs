@@ -588,7 +588,7 @@ impl ClientWorker {
             if ads_header.command != Command::Notification as u16 {
                 match pending.lock().expect("pending map lock poisoned").remove_entry(&invoke_id) {
                     Some((_, tx)) => {
-                        if tx.send(Some((ads_header.clone(), payload_buf))).is_err() {
+                        if tx.send(Some((ads_header, payload_buf))).is_err() {
                             return Err(Error::IoSync(
                                 "settling pending request",
                                 "channel closed, couldn't dispatch response",
