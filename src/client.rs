@@ -332,15 +332,15 @@ impl Client {
             invoke_id: U32::new(dispatched_invoke_id),
         };
 
-        let mut ads_payload_buf = Vec::with_capacity(header.length.get() as usize + payload_len);
+        let mut request_buf = Vec::with_capacity(header.length.get() as usize + payload_len);
 
-        ads_payload_buf.extend_from_slice(header.as_bytes());
+        request_buf.extend_from_slice(header.as_bytes());
 
         // Collect the outgoing data.  Note, allocating a Vec and calling
         // `socket.write_all` only once is faster than writing in multiple
         // steps, even with TCP_NODELAY.
         for buf in payload_bufs.iter() {
-            ads_payload_buf.extend_from_slice(buf);
+            request_buf.extend_from_slice(buf);
         }
 
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -353,7 +353,7 @@ impl Client {
         self.socket
             .lock()
             .expect("panicked during socket write")
-            .write_all(&ads_payload_buf)
+            .write_all(&request_buf)
             .ctx("dispatching assembled command payload")?;
 
         let (resp_header, resp_buf) = match self.read_timeout {
