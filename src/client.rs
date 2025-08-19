@@ -525,10 +525,11 @@ impl ClientWorker {
                 }
 
                 _ => {
-                    if let e @ Err(_) =
-                        socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")
+                    if let Err(e) = socket_rx
+                        .read_exact(&mut ads_header_buf[6..])
+                        .ctx("receiving AMS header")
                     {
-                        return e;
+                        return Err(e);
                     }
 
                     match AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
@@ -545,8 +546,11 @@ impl ClientWorker {
 
             let mut payload_buf = vec![0u8; payload_len as usize];
 
-            if let e @ Err(_) = socket_rx.read_exact(&mut payload_buf).ctx("receiving Ads data payload") {
-                return e.map(|_| ());
+            if let Err(e) = socket_rx
+                .read_exact(&mut payload_buf)
+                .ctx("receiving Ads data payload")
+            {
+                return Err(e);
             }
 
             // Reserved bytes should be well-known
