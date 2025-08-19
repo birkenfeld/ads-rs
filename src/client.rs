@@ -156,6 +156,8 @@ impl Drop for Client {
                 LE::write_u16(&mut close_port_msg[6..], self.source.port());
                 let _ = socket.write_all(&close_port_msg);
             }
+
+            let _ = socket.shutdown(Shutdown::Both);
         }
 
         self.worker.stop();
@@ -499,8 +501,6 @@ impl ClientWorker {
     }
 
     fn stop(&mut self) -> Option<Result<()>> {
-        let _ = self.socket.shutdown(Shutdown::Both);
-
         self.handle.take()?.join().ok()
     }
 }
