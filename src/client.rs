@@ -467,7 +467,10 @@ struct ClientWorker {
 }
 
 impl ClientWorker {
-    fn start(&mut self, mut notif_tx: Sender<notif::Notification>, socket: &TcpStream, pending: PendingMap, source: AmsAddr) {
+    fn start(
+        &mut self, mut notif_tx: Sender<notif::Notification>, socket: &TcpStream, pending: PendingMap,
+        source: AmsAddr,
+    ) {
         let mut socket = socket.try_clone().expect("socket cloning failed");
 
         let rx_worker = std::thread::spawn(move || {
@@ -525,9 +528,7 @@ impl ClientWorker {
                 }
 
                 _ => {
-                    if let Err(e) = socket_rx
-                        .read_exact(&mut ads_header_buf[6..])
-                        .ctx("receiving AMS header")
+                    if let Err(e) = socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")
                     {
                         return Err(e);
                     }
@@ -546,10 +547,7 @@ impl ClientWorker {
 
             let mut payload_buf = vec![0u8; payload_len as usize];
 
-            if let Err(e) = socket_rx
-                .read_exact(&mut payload_buf)
-                .ctx("receiving Ads data payload")
-            {
+            if let Err(e) = socket_rx.read_exact(&mut payload_buf).ctx("receiving Ads data payload") {
                 return Err(e);
             }
 
