@@ -8,7 +8,7 @@ use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
-    Arc, RwLock,
+    Arc, Mutex,
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -25,7 +25,7 @@ use crate::{AmsAddr, AmsNetId, Error, Result};
 use zerocopy::byteorder::little_endian::{U16, U32};
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
-type PendingMap = Arc<RwLock<BTreeMap<u32, oneshot::Sender<Option<(AdsHeader, Vec<u8>)>>>>>;
+type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Option<(AdsHeader, Vec<u8>)>>>>>;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -120,7 +120,7 @@ pub enum Source {
 #[derive(Debug)]
 pub struct Client {
     /// TCP connection (duplicated with the reader)
-    socket: RwLock<TcpStream>,
+    socket: Mutex<TcpStream>,
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
     invoke_id: AtomicU32,
@@ -133,7 +133,7 @@ pub struct Client {
     /// Receiver for notifications: cloned and given out to interested parties
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
-    notif_handles: RwLock<BTreeSet<(AmsAddr, notif::Handle)>>,
+    notif_handles: Mutex<BTreeSet<(AmsAddr, notif::Handle)>>,
     /// IO worker
     worker: ClientWorker,
     /// If we opened our local port with the router
@@ -149,7 +149,7 @@ impl Drop for Client {
             .get_mut()
             .expect("notification handle cache lock was poisoned");
 
-        if let Ok(ref mut socket) = self.socket.write() {
+        if let Ok(ref mut socket) = self.socket.lock() {
             // Remove our port from the router, if necessary.
             if self.source_port_opened {
                 let mut close_port_msg = [1, 0, 2, 0, 0, 0, 0, 0];
@@ -249,7 +249,7 @@ impl Client {
         // bidirectional communication.
         let (notif_tx, notif_rx) = unbounded();
 
-        let pending = Arc::new(RwLock::new(BTreeMap::new()));
+        let pending = Arc::new(Mutex::new(BTreeMap::new()));
 
         // Start the reader thread.
         let mut worker = ClientWorker {
@@ -266,11 +266,11 @@ impl Client {
             worker,
             source_port_opened,
             pending,
-            socket: RwLock::new(socket),
+            socket: Mutex::new(socket),
             notif_recv: notif_rx,
             invoke_id: AtomicU32::new(1),
             read_timeout: timeouts.read,
-            notif_handles: RwLock::default(),
+            notif_handles: Mutex::default(),
         })
     }
 
@@ -349,13 +349,13 @@ impl Client {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.pending
-            .write()
+            .lock()
             .expect("pending command map lock poisoned")
             .insert(dispatched_invoke_id, resp_tx);
 
         self.socket
-            .write()
-            .expect("panicked during socket read")
+            .lock()
+            .expect("panicked during socket write")
             .write_all(&ads_payload_buf)
             .ctx("dispatching assembled command payload")?;
 
@@ -464,7 +464,7 @@ impl Client {
 
 // Implementation detail: reader thread that takes replies and notifications
 // and distributes them accordingly.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ClientWorker {
     socket: TcpStream,
     source: AmsAddr,
@@ -483,7 +483,7 @@ impl ClientWorker {
 
             let _ = socket.shutdown(Shutdown::Both);
 
-            if let Ok(ref mut pending) = pending.write() {
+            if let Ok(ref mut pending) = pending.lock() {
                 let keys = pending.keys().cloned().collect_vec();
                 for key in keys {
                     if let Some(channel) = pending.remove(&key) {
@@ -592,7 +592,7 @@ impl ClientWorker {
             // If it looks like a reply, send it back to the requesting thread,
             // it will handle further validation.
             if ads_header.command != Command::Notification as u16 {
-                match pending.write().expect("pending map lock poisoned").remove_entry(&invoke_id) {
+                match pending.lock().expect("pending map lock poisoned").remove_entry(&invoke_id) {
                     Some((_, tx)) => {
                         if tx.send(Some((ads_header.clone(), payload_buf))).is_err() {
                             return Err(Error::IoSync(
@@ -971,7 +971,7 @@ impl Device<'_> {
 
         self.client
             .notif_handles
-            .write()
+            .lock()
             .expect("notification handle cache lock poisoned")
             .insert((self.addr, handle.get()));
 
@@ -1010,7 +1010,7 @@ impl Device<'_> {
             if let Ok(handle) = req.handle() {
                 self.client
                     .notif_handles
-                    .write()
+                    .lock()
                     .expect("notification handle cache lock poisoned")
                     .insert((self.addr, handle));
             }
@@ -1029,7 +1029,7 @@ impl Device<'_> {
 
         self.client
             .notif_handles
-            .write()
+            .lock()
             .expect("notification handle cache lock poisoned")
             .remove(&(self.addr, handle));
 
@@ -1068,7 +1068,7 @@ impl Device<'_> {
             if req.ensure().is_ok() {
                 self.client
                     .notif_handles
-                    .write()
+                    .lock()
                     .expect("notification handle cache lock poisoned")
                     .remove(&(self.addr, req.req.get()));
             }
