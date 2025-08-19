@@ -254,14 +254,9 @@ impl Client {
         let pending = Arc::new(Mutex::new(BTreeMap::new()));
 
         // Start the reader thread.
-        let mut worker = ClientWorker {
-            source,
-            socket: socket.try_clone().ctx("cloning socket")?,
-            pending: pending.clone(),
-            handle: None,
-        };
+        let mut worker = ClientWorker::default();
 
-        worker.start(notif_tx);
+        worker.start(notif_tx, &socket, pending.clone(), source);
 
         Ok(Client {
             source,
@@ -468,17 +463,12 @@ impl Client {
 // and distributes them accordingly.
 #[derive(Debug, Default)]
 struct ClientWorker {
-    socket: TcpStream,
-    source: AmsAddr,
-    pending: PendingMap,
     handle: Option<JoinHandle<Result<()>>>,
 }
 
 impl ClientWorker {
-    fn start(&mut self, mut notif_tx: Sender<notif::Notification>) {
-        let pending = self.pending.clone();
-        let source = self.source;
-        let mut socket = self.socket.try_clone().expect("socket cloning failed");
+    fn start(&mut self, mut notif_tx: Sender<notif::Notification>, socket: &TcpStream, pending: PendingMap, source: AmsAddr) {
+        let mut socket = socket.try_clone().expect("socket cloning failed");
 
         let rx_worker = std::thread::spawn(move || {
             let result = Self::reader_work(source, pending.clone(), &mut socket, &mut notif_tx);
