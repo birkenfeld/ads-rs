@@ -97,7 +97,7 @@ impl Server {
             socket.read_exact(&mut data).unwrap();
 
             if opts.timeout.is_some() {
-                // nothing should be written while testing client timeout, 
+                // client shouldn't send any data while testing timeout
                 while socket.read(&mut [0]).is_ok() {
                     std::hint::spin_loop();
                 }

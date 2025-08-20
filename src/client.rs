@@ -367,7 +367,7 @@ impl Client {
 
                 Ok(Err(e)) => {
                     self.discard_pending_request(&dispatched_invoke_id);
-                    return Err(e)
+                    return Err(e);
                 }
 
                 Err(RecvTimeoutError::Disconnected) => {
@@ -384,7 +384,7 @@ impl Client {
                     self.discard_pending_request(&dispatched_invoke_id);
 
                     return Err(std::io::ErrorKind::TimedOut.into())
-                        .ctx("waiting for response to dispatched request")
+                        .ctx("waiting for response to dispatched request");
                 }
             },
 
@@ -501,7 +501,11 @@ impl ClientWorker {
                         let err = if let Err(e) = &result {
                             Err(e.clone())
                         } else {
-                            Err(Error::Reply("handling clean shutdown", "pending request at client shutdown", 0))
+                            Err(Error::Reply(
+                                "handling clean shutdown",
+                                "pending request at client shutdown",
+                                0,
+                            ))
                         };
 
                         let _ = channel.send(err);
@@ -528,9 +532,7 @@ impl ClientWorker {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            socket_rx
-                .read_exact(&mut ads_header_buf[..6])
-                .ctx("receiving AMS/TCP header")?;
+            socket_rx.read_exact(&mut ads_header_buf[..6]).ctx("receiving AMS/TCP header")?;
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
@@ -546,9 +548,7 @@ impl ClientWorker {
                 }
 
                 _ => {
-                    socket_rx
-                        .read_exact(&mut ads_header_buf[6..])
-                        .ctx("receiving AMS header")?;
+                    socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")?;
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
                         .map_err(|_| std::io::ErrorKind::InvalidData.into())
@@ -560,9 +560,7 @@ impl ClientWorker {
 
             let mut payload_buf = vec![0u8; payload_len as usize];
 
-            socket_rx
-                .read_exact(&mut payload_buf)
-                .ctx("receiving Ads data payload")?;
+            socket_rx.read_exact(&mut payload_buf).ctx("receiving Ads data payload")?;
 
             // Reserved bytes should be well-known
             // Anything else might be invalid data
@@ -608,11 +606,13 @@ impl ClientWorker {
                         }
                     }
 
-                    _ => return Err(Error::Reply(
-                        "settling pending request",
-                        "invalid invoke id received from server, aborting connection",
-                        invoke_id
-                    ))
+                    _ => {
+                        return Err(Error::Reply(
+                            "settling pending request",
+                            "invalid invoke id received from server, aborting connection",
+                            invoke_id,
+                        ))
+                    }
                 };
             } else {
                 let notif_payload_len = LE::read_u32(&payload_buf);
