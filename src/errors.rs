@@ -27,6 +27,19 @@ pub enum Error {
     IoSync(&'static str, &'static str, u32),
 }
 
+impl Clone for Error {
+    fn clone(&self) -> Self {
+        use Error::*;
+        match self {
+            Io(ctx, e) => Io(ctx, std::io::Error::from(e.kind())),
+            Ads(ctx, e, i) => Ads(ctx, e, *i),
+            Reply(ctx, e, i) => Reply(ctx, e, *i),
+            Overflow(e) => Overflow(*e),
+            IoSync(ctx, e, i) => IoSync(ctx, e, *i),
+        }
+    }
+}
+
 pub(crate) trait ErrContext {
     type Success;
     fn ctx(self, context: &'static str) -> Result<Self::Success>;

@@ -25,7 +25,7 @@ use crate::{AmsAddr, AmsNetId, Error, Result};
 use zerocopy::byteorder::little_endian::{U16, U32};
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
-type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Option<(AdsHeader, Vec<u8>)>>>>>;
+type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>>>>;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -358,9 +358,11 @@ impl Client {
 
         let (resp_header, resp_buf) = match self.read_timeout {
             Some(timeout) => match resp_rx.recv_timeout(timeout) {
-                Ok(Some((header, payload))) => (header, payload),
+                Ok(Ok((header, payload))) => (header, payload),
 
-                Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                Ok(Err(e)) => return Err(e),
+
+                Err(RecvTimeoutError::Disconnected) => {
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
                         "response channel was closed",
@@ -374,10 +376,12 @@ impl Client {
                 }
             },
 
-            None => match resp_rx.recv().map_err(|e| e.to_string()) {
-                Ok(Some((header, payload))) => (header, payload),
+            None => match resp_rx.recv() {
+                Ok(Ok((header, payload))) => (header, payload),
 
-                Ok(None) | Err(_) => {
+                Ok(Err(e)) => return Err(e),
+
+                Err(_) => {
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
                         "response channel was closed",
@@ -445,7 +449,7 @@ impl Client {
         let mut rest_len = resp_buf.len();
         for buf in result_bufs {
             let n = buf.len().min(rest_len);
-            let b = &resp_buf[taken..taken + n];
+            let b = &resp_buf[taken..][..n];
             buf[..n].copy_from_slice(b);
             taken += n;
             rest_len -= n;
@@ -482,7 +486,13 @@ impl ClientWorker {
                 let keys = pending.keys().cloned().collect_vec();
                 for key in keys {
                     if let Some(channel) = pending.remove(&key) {
-                        let _ = channel.send(None);
+                        let err = if let Err(e) = &result {
+                            Err(e.clone())
+                        } else {
+                            Err(Error::Reply("handling clean shutdown", "pending request at client shutdown", 0))
+                        };
+
+                        let _ = channel.send(err);
                     };
                 }
             }
@@ -506,9 +516,8 @@ impl ClientWorker {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            if let e @ Err(_) = socket_rx.read_exact(&mut ads_header_buf[..6]).ctx("receiving AMS/TCP header")
-            {
-                return e;
+            if let Err(e) = socket_rx.read_exact(&mut ads_header_buf[..6]).ctx("receiving AMS/TCP header") {
+                return Err(e);
             }
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
@@ -517,19 +526,18 @@ impl ClientWorker {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
-                    if let e @ Err(_) = socket_rx
+                    if let Err(e) = socket_rx
                         .read_exact(&mut discard[..packet_len as usize])
                         .ctx("discarding bad data")
                     {
-                        return e;
+                        return Err(e);
                     }
 
                     continue;
                 }
 
                 _ => {
-                    if let Err(e) = socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")
-                    {
+                    if let Err(e) = socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header") {
                         return Err(e);
                     }
 
@@ -537,7 +545,7 @@ impl ClientWorker {
                         .map_err(|_| std::io::ErrorKind::InvalidData.into())
                         .ctx("decoding AMS header")
                     {
-                        e @ Err(_) => return e.map(|_| ()),
+                        Err(e) => return Err(e),
                         Ok(header) => header,
                     }
                 }
@@ -586,7 +594,7 @@ impl ClientWorker {
             if ads_header.command != Command::Notification as u16 {
                 match pending.lock().expect("pending map lock poisoned").remove_entry(&invoke_id) {
                     Some((_, tx)) => {
-                        if tx.send(Some((ads_header, payload_buf))).is_err() {
+                        if tx.send(Ok((ads_header, payload_buf))).is_err() {
                             return Err(Error::IoSync(
                                 "settling pending request",
                                 "channel closed, couldn't dispatch response",
