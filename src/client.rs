@@ -170,6 +170,14 @@ impl Drop for Client {
 }
 
 impl Client {
+    fn insert_pending_request(&self, id: u32, tx: oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>) {
+        let _ = self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
+    }
+
+    fn discard_pending_request(&self, id: &u32) {
+        let _ = self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
+    }
+
     /// Open a new connection to an ADS server.
     ///
     /// If connecting to a server that has an AMS router, it needs to have a
@@ -345,10 +353,7 @@ impl Client {
 
         let (resp_tx, resp_rx) = oneshot::channel();
 
-        self.pending
-            .lock()
-            .expect("pending command map lock poisoned")
-            .insert(dispatched_invoke_id, resp_tx);
+        self.insert_pending_request(dispatched_invoke_id, resp_tx);
 
         self.socket
             .lock()
@@ -360,9 +365,14 @@ impl Client {
             Some(timeout) => match resp_rx.recv_timeout(timeout) {
                 Ok(Ok((header, payload))) => (header, payload),
 
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => {
+                    self.discard_pending_request(&dispatched_invoke_id);
+                    return Err(e)
+                }
 
                 Err(RecvTimeoutError::Disconnected) => {
+                    self.discard_pending_request(&dispatched_invoke_id);
+
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
                         "response channel was closed",
@@ -371,6 +381,8 @@ impl Client {
                 }
 
                 Err(RecvTimeoutError::Timeout) => {
+                    self.discard_pending_request(&dispatched_invoke_id);
+
                     return Err(std::io::ErrorKind::TimedOut.into())
                         .ctx("waiting for response to dispatched request")
                 }

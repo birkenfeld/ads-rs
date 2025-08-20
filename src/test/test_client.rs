@@ -24,11 +24,11 @@ fn test_garbage_packet() {
 #[test]
 fn test_timeout() {
     run_test(
-        ServerOpts { timeout: Some(Duration::from_millis(1)), no_reply: true, ..Default::default() },
+        ServerOpts { timeout: Some(Duration::from_millis(1)), ..Default::default() },
         |device| {
             let err = device.get_info().unwrap_err();
             match err {
-                Error::IoSync(..) => (),
+                Error::Io(_, err) if matches!(err.kind(), std::io::ErrorKind::TimedOut) => (),
                 _ => panic!("unexpected error from timeout: {}", err),
             }
         },
