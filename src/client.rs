@@ -106,7 +106,7 @@ impl Timeouts {
 /// See [these docs on connections and Ads route configurations](https://jisotalo.fi/ads-client/#md:connection-setup)
 #[derive(Clone, Copy, Debug)]
 pub enum Source {
-    #[deprecated(note = "Use `ads::Source::Any`")]
+    #[deprecated(note = "Use `ads::Source::AnyLocalIp`")]
     /// The `Source::Auto` variant is deprecated, use `Source::Any` instead
     Auto,
 
@@ -120,7 +120,7 @@ pub enum Source {
 
     /// Create a new AmsNetId using the IPv4 address of the network interface that was used to
     /// connect to the remote ADS router, using port 58913
-    Any,
+    AnyLocalIp,
 }
 
 /// Represents a connection to a ADS server.
@@ -252,7 +252,7 @@ impl Client {
             Source::Addr(id) => id,
 
             #[allow(deprecated)]
-            Source::Any | Source::Auto => {
+            Source::AnyLocalIp | Source::Auto => {
                 let local_addr = socket.local_addr().ctx("getting local socket address")?.ip();
                 let local_ip = match local_addr {
                     IpAddr::V4(ip) => ip,

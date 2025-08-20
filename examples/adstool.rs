@@ -413,7 +413,7 @@ fn connect(port: ads::AmsPort, args: &Cli) -> ads::Result<(ads::Client, ads::Ams
 
         ads::Source::Addr(ads::AmsAddr::new(local_net_id, 58913))
     } else {
-        ads::Source::Any
+        ads::Source::AnyLocalIp
     };
 
     // timeout here to prevent the remote machine allowing the connection but not responding
