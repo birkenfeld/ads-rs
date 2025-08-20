@@ -36,6 +36,16 @@ fn test_timeout() {
 }
 
 #[test]
+fn test_wrong_invokeid() {
+    run_test(ServerOpts { ignore_invokeid: true, ..Default::default() }, |device| {
+        assert!(matches!(
+            device.get_info().unwrap_err(),
+            Error::Reply(_, "invalid invoke id received from server, aborting connection", _)
+        ));
+    })
+}
+
+#[test]
 fn test_devinfo() {
     run_test(ServerOpts::default(), |device| {
         let info = device.get_info().unwrap();

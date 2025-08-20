@@ -602,7 +602,12 @@ impl ClientWorker {
                             ));
                         }
                     }
-                    _ => continue,
+
+                    _ => return Err(Error::Reply(
+                        "settling pending request",
+                        "invalid invoke id received from server, aborting connection",
+                        invoke_id
+                    ))
                 };
             } else {
                 let notif_payload_len = LE::read_u32(&payload_buf);
