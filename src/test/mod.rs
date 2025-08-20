@@ -96,9 +96,9 @@ impl Server {
             let mut data = vec![0; header.data_length.get() as usize];
             socket.read_exact(&mut data).unwrap();
 
-            if let Some(_) = opts.timeout {
+            if opts.timeout.is_some() {
                 // nothing should be written while testing client timeout, 
-                while let Ok(_) = socket.read(&mut [0]) {
+                while socket.read(&mut [0]).is_ok() {
                     std::hint::spin_loop();
                 }
 

@@ -528,9 +528,9 @@ impl ClientWorker {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            if let Err(e) = socket_rx.read_exact(&mut ads_header_buf[..6]).ctx("receiving AMS/TCP header") {
-                return Err(e);
-            }
+            socket_rx
+                .read_exact(&mut ads_header_buf[..6])
+                .ctx("receiving AMS/TCP header")?;
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
@@ -538,28 +538,21 @@ impl ClientWorker {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
-                    if let Err(e) = socket_rx
+                    socket_rx
                         .read_exact(&mut discard[..packet_len as usize])
-                        .ctx("discarding bad data")
-                    {
-                        return Err(e);
-                    }
+                        .ctx("discarding bad data")?;
 
                     continue;
                 }
 
                 _ => {
-                    if let Err(e) = socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header") {
-                        return Err(e);
-                    }
+                    socket_rx
+                        .read_exact(&mut ads_header_buf[6..])
+                        .ctx("receiving AMS header")?;
 
-                    match AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
+                    AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
                         .map_err(|_| std::io::ErrorKind::InvalidData.into())
-                        .ctx("decoding AMS header")
-                    {
-                        Err(e) => return Err(e),
-                        Ok(header) => header,
-                    }
+                        .ctx("decoding AMS header")?
                 }
             };
 
@@ -567,9 +560,9 @@ impl ClientWorker {
 
             let mut payload_buf = vec![0u8; payload_len as usize];
 
-            if let Err(e) = socket_rx.read_exact(&mut payload_buf).ctx("receiving Ads data payload") {
-                return Err(e);
-            }
+            socket_rx
+                .read_exact(&mut payload_buf)
+                .ctx("receiving Ads data payload")?;
 
             // Reserved bytes should be well-known
             // Anything else might be invalid data
