@@ -170,14 +170,6 @@ impl Drop for Client {
 }
 
 impl Client {
-    fn insert_pending_request(&self, id: u32, tx: oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>) {
-        let _ = self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
-    }
-
-    fn discard_pending_request(&self, id: &u32) {
-        let _ = self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
-    }
-
     /// Open a new connection to an ADS server.
     ///
     /// If connecting to a server that has an AMS router, it needs to have a
@@ -472,6 +464,14 @@ impl Client {
 
         // Return either the error or the length of data.
         Ok(resp_buf.len())
+    }
+
+    fn insert_pending_request(&self, id: u32, tx: oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>) {
+        let _ = self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
+    }
+
+    fn discard_pending_request(&self, id: &u32) {
+        let _ = self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
     }
 }
 
