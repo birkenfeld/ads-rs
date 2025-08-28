@@ -13,6 +13,7 @@ rust-version = "1.63"
 byteorder = "1.5.0"
 crossbeam-channel = "0.5.13"
 itertools = "0.13.0"
+oneshot = { version = "0.1.11", default-features = false, features = ["std"] }
 thiserror = "2.0"
 zerocopy = { version = "0.8.9", features = ["derive"] }
 
