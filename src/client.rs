@@ -522,9 +522,7 @@ impl ClientWorker {
     fn stop(&mut self) -> Option<Result<()>> {
         self.handle.take()?.join().ok()
     }
-}
 
-impl ClientWorker {
     fn reader_work(
         source: AmsAddr, pending: PendingMap, socket_rx: &mut TcpStream,
         notif_tx: &mut Sender<notif::Notification>,
