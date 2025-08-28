@@ -467,11 +467,11 @@ impl Client {
     }
 
     fn insert_pending_request(&self, id: u32, tx: oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>) {
-        let _ = self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
+        self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
     }
 
     fn discard_pending_request(&self, id: &u32) {
-        let _ = self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
+        self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
     }
 }
 
