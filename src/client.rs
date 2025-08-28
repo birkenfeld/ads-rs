@@ -134,8 +134,8 @@ pub struct Client {
     notif_recv: Receiver<notif::Notification>,
     /// Active notification handles: these will be closed on Drop
     notif_handles: Mutex<BTreeSet<(AmsAddr, notif::Handle)>>,
-    /// IO worker
-    worker: ClientWorker,
+    /// IO receiver
+    receiver: ClientReceiver,
     /// If we opened our local port with the router
     source_port_opened: bool,
 }
@@ -160,7 +160,7 @@ impl Drop for Client {
             let _ = socket.shutdown(Shutdown::Both);
         }
 
-        self.worker.stop();
+        self.receiver.stop();
 
         // Close all open notification handles.
         for (addr, handle) in std::mem::take(handles) {
@@ -254,13 +254,13 @@ impl Client {
         let pending = Arc::new(Mutex::new(BTreeMap::new()));
 
         // Start the reader thread.
-        let mut worker = ClientWorker::default();
+        let mut receiver = ClientReceiver::default();
 
-        worker.start(notif_tx, &socket, pending.clone(), source);
+        receiver.start(notif_tx, &socket, pending.clone(), source);
 
         Ok(Client {
             source,
-            worker,
+            receiver,
             source_port_opened,
             pending,
             socket: Mutex::new(socket),
@@ -478,11 +478,11 @@ impl Client {
 // Implementation detail: reader thread that takes replies and notifications
 // and distributes them accordingly.
 #[derive(Debug, Default)]
-struct ClientWorker {
+struct ClientReceiver {
     handle: Option<JoinHandle<Result<()>>>,
 }
 
-impl ClientWorker {
+impl ClientReceiver {
     fn start(
         &mut self, mut notif_tx: Sender<notif::Notification>, socket: &TcpStream, pending: PendingMap,
         source: AmsAddr,
@@ -633,7 +633,7 @@ impl ClientWorker {
     }
 }
 
-impl Drop for ClientWorker {
+impl Drop for ClientReceiver {
     fn drop(&mut self) {
         self.stop();
     }
