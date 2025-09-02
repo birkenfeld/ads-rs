@@ -364,7 +364,6 @@ impl Client {
 
                 Err(RecvTimeoutError::Disconnected) => {
                     self.discard_pending_request(&dispatched_invoke_id);
-
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
                         "response channel was closed",
@@ -374,7 +373,6 @@ impl Client {
 
                 Err(RecvTimeoutError::Timeout) => {
                     self.discard_pending_request(&dispatched_invoke_id);
-
                     return Err(std::io::ErrorKind::TimedOut.into())
                         .ctx("waiting for response to dispatched request");
                 }
@@ -383,14 +381,18 @@ impl Client {
             None => match resp_rx.recv() {
                 Ok(Ok((header, payload))) => (header, payload),
 
-                Ok(Err(e)) => return Err(e),
+                Ok(Err(e)) => {
+                    self.discard_pending_request(&dispatched_invoke_id);
+                    return Err(e);
+                }
 
                 Err(_) => {
+                    self.discard_pending_request(&dispatched_invoke_id);
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
                         "response channel was closed",
                         dispatched_invoke_id,
-                    ))
+                    ));
                 }
             },
         };
