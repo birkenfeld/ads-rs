@@ -40,6 +40,7 @@ impl Clone for Error {
             Reply(ctx, e, i) => Reply(ctx, e, *i),
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
+            Other(ctx) => Other(ctx)
         }
     }
 }
