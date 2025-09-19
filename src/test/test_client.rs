@@ -198,7 +198,7 @@ fn test_handle_callback_registration() {
         let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let end_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
-        device.remove_callback(cb_handle).unwrap();
+        handle.remove_callback(cb_handle).unwrap();
 
         let recv_err = rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
         assert!(recv_err.is_disconnected(), "callback closure data wasn't dropped correctly");
