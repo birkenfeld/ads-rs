@@ -515,7 +515,6 @@ impl Client {
     /// _Note: You may see better performance using the above-mentioned_
     /// _manual reactivity strategy. See `ads::Device::add_notification` and_
     /// _`ads::Client::get_notification_channel`_
-    #[must_use]
     pub fn register_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
     where
         F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
@@ -1157,7 +1156,6 @@ impl Device<'_> {
     /// _Note: You may see better performance using the above-mentioned_
     /// _manual reactivity strategy. See `ads::Device::add_notification` and_
     /// _`ads::Client::get_notification_channel`_
-    #[must_use]
     pub fn register_callback<F>(
         &self,
         index_group: u32,
