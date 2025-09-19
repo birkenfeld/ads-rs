@@ -187,7 +187,7 @@ fn test_device_callback_registration() {
 
         let (tx, rx) = unbounded();
         let cb_handle = device
-            .register_callback(index::PLC_RW_M, 0, &NOTIF_ATTR, move |sample| {
+            .add_callback(index::PLC_RW_M, 0, &NOTIF_ATTR, move |sample| {
                 let _ = tx.send(sample.data.to_vec());
             })
             .unwrap();

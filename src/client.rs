@@ -545,7 +545,7 @@ impl Client {
     /// _Note: You may see better performance using the above-mentioned_
     /// _manual reactivity strategy. See `ads::Device::add_notification` and_
     /// _`ads::Client::get_notification_channel`_
-    pub fn register_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
+    pub fn add_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
     where
         F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
     {
@@ -1169,14 +1169,14 @@ impl Device<'_> {
     /// _Note: You may see better performance using the above-mentioned_
     /// _manual reactivity strategy. See `ads::Device::add_notification` and_
     /// _`ads::Client::get_notification_channel`_
-    pub fn register_callback<F>(
+    pub fn add_callback<F>(
         &self, index_group: u32, index_offset: u32, attributes: &notif::Attributes, callback: F,
     ) -> Result<CallbackHandle>
     where
         F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
     {
         let notif_handle = self.add_notification(index_group, index_offset, attributes)?;
-        self.client.register_callback(notif_handle, callback)
+        self.client.add_callback(notif_handle, callback)
     }
 
     /// Deregister a notification callback.
