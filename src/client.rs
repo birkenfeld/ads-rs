@@ -852,6 +852,13 @@ pub struct Device<'c> {
     addr: AmsAddr,
 }
 
+impl<'c> Device<'c> {
+    /// Create a handle for the given symbol name in this device's context.
+    pub fn handle(&self, symbol_name: &str) -> Result<symbol::Handle<'c>> {
+        symbol::Handle::new(*self, symbol_name)
+    }
+}
+
 impl Device<'_> {
     /// Read the device's name + version.
     pub fn get_info(&self) -> Result<DeviceInfo> {
