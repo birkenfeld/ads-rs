@@ -35,7 +35,9 @@ pub enum Error {
     /// Exhausted all unique callback handles; this is most likely a logic
     /// error, as callback handles are reclaimed for reuse after
     /// deregistration.
-    #[error("exhausted all available unique callback handles; this is most likely a logic error, check your code")]
+    #[error(
+        "exhausted all available unique callback handles; this is most likely a logic error, check your code"
+    )]
     AllHandlesInUse,
 
     /// An unspecified catch-all error
@@ -53,7 +55,7 @@ impl Clone for Error {
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
             Poisoned(ctx, e) => Poisoned(ctx, e.clone()),
-            AllHandlesInUse => AllHandlesInUse
+            AllHandlesInUse => AllHandlesInUse,
             Other(ctx) => Other(ctx),
         }
     }
