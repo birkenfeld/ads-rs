@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use crate::test::{config_test_server, ServerOpts};
-use crate::{AmsAddr, AmsNetId, Client, Device, Error, Source, Timeouts};
+use crate::{index, AmsAddr, AmsNetId, Client, Device, Error, Source, Timeouts};
 
 fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
     let timeouts = if let Some(tmo) = opts.timeout { Timeouts::new(tmo) } else { Timeouts::none() };
@@ -170,6 +170,46 @@ fn test_symbolaccess() {
 }
 
 #[test]
+fn test_device_callback_registration() {
+    use crate::notif::*;
+    use std::time::Duration;
+    use crossbeam_channel::unbounded;
+
+    run_test(ServerOpts::default(), |device| {
+        device.write(index::PLC_RW_M, 0, &[4, 4, 1, 1]).unwrap();
+
+        const NOTIF_ATTR: Attributes = Attributes::new(
+            4,
+            TransmissionMode::ServerOnChange,
+            Duration::from_millis(1),
+            Duration::from_millis(1)
+        );
+
+        let (tx, rx) = unbounded();
+        let cb_handle = device.register_callback(
+            index::PLC_RW_M,
+            0,
+            &NOTIF_ATTR,
+            move |sample| { let _ = tx.send(sample.data.to_vec()); }
+        ).unwrap();
+
+        device.write(index::PLC_RW_M, 0, &[8, 8, 1, 1]).unwrap();
+
+        let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let end_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        device.remove_callback(cb_handle).unwrap();
+
+        let recv_err = rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        assert!(recv_err.is_disconnected(), "callback closure data wasn't dropped correctly");
+
+        let samples = [&start_state[..], &end_state[..]];
+
+        assert!(matches!(samples, [[4, 4, 1, 1], [8, 8, 1, 1]]), "sample data didn't match the start and/or end states");
+    })
+}
+
+#[test]
 fn test_notification() {
     use crate::notif::*;
     use std::time::Duration;
@@ -182,9 +222,9 @@ fn test_notification() {
             Duration::from_secs(1),
             Duration::from_secs(1),
         );
-        device.write(0x4020, 0, &[4, 4, 1, 1]).unwrap();
-        let handle = device.add_notification(0x4020, 0, &attrib).unwrap();
-        device.write(0x4020, 0, &[8, 8, 1, 1]).unwrap();
+        device.write(index::PLC_RW_M, 0, &[4, 4, 1, 1]).unwrap();
+        let handle = device.add_notification(index::PLC_RW_M, 0, &attrib).unwrap();
+        device.write(index::PLC_RW_M, 0, &[8, 8, 1, 1]).unwrap();
         device.delete_notification(handle).unwrap();
 
         // Including the add_notification, each request generates a notification

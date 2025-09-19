@@ -627,7 +627,10 @@ impl ClientNotificationWorker {
         let mut cbs = self.callbacks
             .write()
             .ctx("registering notificaiton callback")
-            .inspect_err(|_| recycled_handles.push_back(cb_handle))?;
+            .map_err(|err| {
+                recycled_handles.push_back(cb_handle);
+                err
+            })?;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             cb_map.insert(cb_handle, callback);

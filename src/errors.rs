@@ -2,8 +2,6 @@
 
 use std::sync::LockResult;
 
-use zerocopy::AllocError;
-
 /// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
