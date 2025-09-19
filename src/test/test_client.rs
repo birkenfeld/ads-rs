@@ -170,6 +170,50 @@ fn test_symbolaccess() {
 }
 
 #[test]
+fn test_handle_callback_registration() {
+    use crate::notif::*;
+    use crossbeam_channel::unbounded;
+    use std::time::Duration;
+
+    run_test(ServerOpts::default(), |device| {
+        let handle = device.handle("SYMBOL").unwrap();
+        handle.write(&[4, 4, 1, 1]).unwrap();
+
+        const NOTIF_ATTR: Attributes = Attributes::new(
+            4,
+            TransmissionMode::ServerOnChange,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        );
+
+        let (tx, rx) = unbounded();
+        let cb_handle = handle
+            .add_callback(&NOTIF_ATTR, move |sample| {
+                let _ = tx.send(sample.data.to_vec());
+            })
+            .unwrap();
+
+        handle.write(&[8, 8, 1, 1]).unwrap();
+
+        let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let end_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        device.remove_callback(cb_handle).unwrap();
+
+        let recv_err = rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        assert!(recv_err.is_disconnected(), "callback closure data wasn't dropped correctly");
+
+        let samples = [&start_state[..], &end_state[..]];
+
+        assert!(
+            matches!(samples, [[4, 4, 1, 1], [8, 8, 1, 1]]),
+            "sample data didn't match the start and/or end states ({:?})",
+            samples
+        );
+    })
+}
+
+#[test]
 fn test_device_callback_registration() {
     use crate::notif::*;
     use crossbeam_channel::unbounded;
