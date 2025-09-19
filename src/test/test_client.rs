@@ -172,8 +172,8 @@ fn test_symbolaccess() {
 #[test]
 fn test_device_callback_registration() {
     use crate::notif::*;
-    use std::time::Duration;
     use crossbeam_channel::unbounded;
+    use std::time::Duration;
 
     run_test(ServerOpts::default(), |device| {
         device.write(index::PLC_RW_M, 0, &[4, 4, 1, 1]).unwrap();
@@ -182,16 +182,15 @@ fn test_device_callback_registration() {
             4,
             TransmissionMode::ServerOnChange,
             Duration::from_millis(1),
-            Duration::from_millis(1)
+            Duration::from_millis(1),
         );
 
         let (tx, rx) = unbounded();
-        let cb_handle = device.register_callback(
-            index::PLC_RW_M,
-            0,
-            &NOTIF_ATTR,
-            move |sample| { let _ = tx.send(sample.data.to_vec()); }
-        ).unwrap();
+        let cb_handle = device
+            .register_callback(index::PLC_RW_M, 0, &NOTIF_ATTR, move |sample| {
+                let _ = tx.send(sample.data.to_vec());
+            })
+            .unwrap();
 
         device.write(index::PLC_RW_M, 0, &[8, 8, 1, 1]).unwrap();
 
@@ -205,7 +204,10 @@ fn test_device_callback_registration() {
 
         let samples = [&start_state[..], &end_state[..]];
 
-        assert!(matches!(samples, [[4, 4, 1, 1], [8, 8, 1, 1]]), "sample data didn't match the start and/or end states");
+        assert!(
+            matches!(samples, [[4, 4, 1, 1], [8, 8, 1, 1]]),
+            "sample data didn't match the start and/or end states"
+        );
     })
 }
 

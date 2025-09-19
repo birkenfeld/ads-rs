@@ -120,8 +120,8 @@ pub enum Source {
 /// instance.
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct CallbackHandle {
-  notif_handle: u32,
-  cb_handle: u32
+    notif_handle: u32,
+    cb_handle: u32,
 }
 
 impl CallbackHandle {
@@ -586,7 +586,7 @@ struct ClientNotificationWorker {
     worker: Option<JoinHandle<Result<()>>>,
     callback_handle_counter: u32,
     callbacks: CallbackMap,
-    recycled_handles: VecDeque<u32>
+    recycled_handles: VecDeque<u32>,
 }
 
 impl ClientNotificationWorker {
@@ -608,10 +608,8 @@ impl ClientNotificationWorker {
             Ok(handle)
         } else {
             let cb_handle = self.callback_handle_counter;
-            self.callback_handle_counter = self
-                .callback_handle_counter
-                .checked_add(1)
-                .ok_or(Error::AllHandlesInUse)?;
+            self.callback_handle_counter =
+                self.callback_handle_counter.checked_add(1).ok_or(Error::AllHandlesInUse)?;
 
             Ok(cb_handle)
         }
@@ -623,13 +621,10 @@ impl ClientNotificationWorker {
         let cb_handle = self.new_callback_handle()?;
 
         let recycled_handles = &mut self.recycled_handles;
-        let mut cbs = self.callbacks
-            .write()
-            .ctx("registering notificaiton callback")
-            .map_err(|err| {
-                recycled_handles.push_back(cb_handle);
-                err
-            })?;
+        let mut cbs = self.callbacks.write().ctx("registering notificaiton callback").map_err(|err| {
+            recycled_handles.push_back(cb_handle);
+            err
+        })?;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             cb_map.insert(cb_handle, callback);
@@ -1176,14 +1171,10 @@ impl Device<'_> {
     /// _manual reactivity strategy. See `ads::Device::add_notification` and_
     /// _`ads::Client::get_notification_channel`_
     pub fn register_callback<F>(
-        &self,
-        index_group: u32,
-        index_offset: u32,
-        attributes: &notif::Attributes,
-        callback: F
+        &self, index_group: u32, index_offset: u32, attributes: &notif::Attributes, callback: F,
     ) -> Result<CallbackHandle>
     where
-        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static
+        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
     {
         let notif_handle = self.add_notification(index_group, index_offset, attributes)?;
         self.client.register_callback(notif_handle, callback)
