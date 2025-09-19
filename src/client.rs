@@ -7,7 +7,6 @@ use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
-use std::sync::RwLock;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex,
@@ -28,8 +27,8 @@ use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
 type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>>>>;
 
-type NotifCallback = Box<dyn for<'data> Fn(&'data notif::Sample) + Send + Sync>;
-type CallbackMap = Arc<RwLock<BTreeMap<notif::Handle, BTreeMap<u32, NotifCallback>>>>;
+type NotifCallback = Box<dyn for<'data> FnMut(&'data notif::Sample) + Send + Sync>;
+type CallbackMap = Arc<Mutex<BTreeMap<notif::Handle, BTreeMap<u32, NotifCallback>>>>;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -548,7 +547,7 @@ impl Client {
     /// _`ads::Client::get_notification_channel`_
     pub fn register_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
     where
-        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
+        F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
     {
         self.notif_work
             .lock()
@@ -621,7 +620,7 @@ impl ClientNotificationWorker {
         let cb_handle = self.new_callback_handle()?;
 
         let recycled_handles = &mut self.recycled_handles;
-        let mut cbs = self.callbacks.write().ctx("registering notificaiton callback").map_err(|err| {
+        let mut cbs = self.callbacks.lock().ctx("registering notificaiton callback").map_err(|err| {
             recycled_handles.push_back(cb_handle);
             err
         })?;
@@ -639,7 +638,7 @@ impl ClientNotificationWorker {
 
     fn remove_callback(&mut self, handle: CallbackHandle) -> Result<()> {
         let CallbackHandle { notif_handle, cb_handle } = handle;
-        let mut cbs = self.callbacks.write().ctx("deregistering notification callback")?;
+        let mut cbs = self.callbacks.lock().ctx("deregistering notification callback")?;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             let _ = cb_map.remove(&cb_handle);
@@ -651,15 +650,15 @@ impl ClientNotificationWorker {
 
     fn notif_work(recv: Receiver<notif::Notification>, callbacks: CallbackMap) -> Result<()> {
         for notif in recv.iter() {
-            let cbs = callbacks.read().ctx("invoking notification callbacks")?;
+            let mut cbs = callbacks.lock().ctx("invoking notification callbacks")?;
 
             for sample in notif.samples() {
-                let cb_map = match cbs.get(&sample.handle) {
+                let cb_map = match cbs.get_mut(&sample.handle) {
                     Some(map) => map,
                     None => continue,
                 };
 
-                for (_, cb) in cb_map.iter() {
+                for (_, cb) in cb_map.iter_mut() {
                     cb(&sample)
                 }
             }
@@ -1174,7 +1173,7 @@ impl Device<'_> {
         &self, index_group: u32, index_offset: u32, attributes: &notif::Attributes, callback: F,
     ) -> Result<CallbackHandle>
     where
-        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
+        F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
     {
         let notif_handle = self.add_notification(index_group, index_offset, attributes)?;
         self.client.register_callback(notif_handle, callback)

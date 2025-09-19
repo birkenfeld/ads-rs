@@ -41,7 +41,7 @@ impl<'c> Handle<'c> {
     /// _`ads::Client::get_notification_channel`_
     pub fn register_callback<F>(&self, attrs: &notif::Attributes, callback: F) -> Result<CallbackHandle>
     where
-        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
+        F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
     {
         self.device
             .register_callback(index::RW_SYMVAL_BYHANDLE, self.handle, attrs, callback)
