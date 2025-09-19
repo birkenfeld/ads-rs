@@ -7,9 +7,9 @@ use std::io::Read;
 use byteorder::{ByteOrder, ReadBytesExt, LE};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
+use crate::{index, notif, Device, Result};
+use crate::client::CallbackHandle;
 use crate::errors::{ErrContext, Error};
-use crate::index;
-use crate::{Device, Result};
 
 /// A handle to a variable within the ADS device.
 ///
@@ -25,6 +25,33 @@ impl<'c> Handle<'c> {
         let mut handle_bytes = [0; 4];
         device.write_read_exact(index::GET_SYMHANDLE_BYNAME, 0, symbol.as_bytes(), &mut handle_bytes)?;
         Ok(Self { device, handle: u32::from_le_bytes(handle_bytes) })
+    }
+
+    /// Registers a notification request with the ADS server and registers a
+    /// callback with local client.
+    /// The callback will be invoked callback when the client receives a
+    /// notification with data for the given symbol descriptors.
+    ///
+    /// This is a quick method to acheive reactivity to remote symbol updates.
+    /// An alternative strategy would require registerig a notification with
+    /// the ADS server and filtering the global notification stream.
+    ///
+    /// _Note: You may see better performance using the above-mentioned_
+    /// _manual reactivity strategy. See `ads::Device::add_notification` and_
+    /// _`ads::Client::get_notification_channel`_
+    #[must_use]
+    pub fn register_callback<F>(&self, attrs: &notif::Attributes, callback: F) -> Result<CallbackHandle>
+    where
+        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static
+    {
+        self.device.register_callback(index::RW_SYMVAL_BYHANDLE, self.handle, attrs, callback)
+    }
+
+    /// Deregister a notification callback.
+    /// If the handle was already removed or otherwise doesn't exist, this is
+    /// a no-op and returns `Ok(())`
+    pub fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
+        self.device.remove_callback(handle)
     }
 
     /// Return the raw handle.

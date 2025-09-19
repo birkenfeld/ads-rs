@@ -1,6 +1,6 @@
 //! Contains the TCP client to connect to an ADS server.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 use std::io::{ErrorKind, Read, Write};
@@ -20,7 +20,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
-use crate::notif;
+use crate::{notif, symbol};
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
 use zerocopy::byteorder::little_endian::{U16, U32};
@@ -30,8 +30,6 @@ type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Result<(AdsHeader, Vec
 
 type NotifCallback = Box<dyn for<'data> Fn(&'data notif::Sample) + Send + Sync>;
 type CallbackMap = Arc<RwLock<BTreeMap<notif::Handle, BTreeMap<u32, NotifCallback>>>>;
-
-type CallbackHandle = usize;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -116,6 +114,21 @@ pub enum Source {
     /// Request to open a port in the connected router and get the address from
     /// it.  This is necessary when connecting to a local PLC on `127.0.0.1`.
     Request,
+}
+
+/// A unique handle to a callback registration held by an `ads::Client`
+/// instance.
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub struct CallbackHandle {
+  notif_handle: u32,
+  cb_handle: u32
+}
+
+impl CallbackHandle {
+    /// Returns the underlying notification handle
+    pub fn notification_handle(&self) -> notif::Handle {
+        self.notif_handle
+    }
 }
 
 /// Represents a connection to a ADS server.
@@ -523,8 +536,17 @@ impl Client {
         Ok(resp_buf.len())
     }
 
-    /// Register a callback to be invoked when a notification is received
-    /// for the specified handle
+    /// Registers a callback to be invoked when a notification is
+    /// received for an already registered symbol descriptor.
+    ///
+    /// This is a quick method to acheive reactivity to remote symbol updates.
+    /// An alternative strategy would require registerig a notification with
+    /// the ADS server and filtering the global notification stream.
+    ///
+    /// _Note: You may see better performance using the above-mentioned_
+    /// _manual reactivity strategy. See `ads::Device::add_notification` and_
+    /// _`ads::Client::get_notification_channel`_
+    #[must_use]
     pub fn register_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
     where
         F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
@@ -541,8 +563,9 @@ impl Client {
     }
 
     /// Deregister a notification callback.
-    /// If the handle doesn't exist or was already removed, this is a no-op
-    pub fn deregister_callback(&self, handle: CallbackHandle) -> Result<()> {
+    /// If the handle was already removed or otherwise doesn't exist, this is
+    /// a no-op and returns `Ok(())`
+    pub fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
         if let Some(worker) = self.notif_work.lock().ctx("deregistering notification callback")?.as_mut() {
             worker.remove_callback(handle)
         } else {
@@ -564,6 +587,7 @@ struct ClientNotificationWorker {
     worker: Option<JoinHandle<Result<()>>>,
     callback_handle_counter: u32,
     callbacks: CallbackMap,
+    recycled_handles: VecDeque<u32>
 }
 
 impl ClientNotificationWorker {
@@ -580,30 +604,31 @@ impl ClientNotificationWorker {
         }
     }
 
-    fn create_internal_handle(&mut self) -> u32 {
-        let cb_handle = self.callback_handle_counter;
-        self.callback_handle_counter += 1;
+    fn new_callback_handle(&mut self) -> Result<u32> {
+        if let Some(handle) = self.recycled_handles.pop_front() {
+            Ok(handle)
+        } else {
+            let cb_handle = self.callback_handle_counter;
+            self.callback_handle_counter = self
+                .callback_handle_counter
+                .checked_add(1)
+                .ok_or(Error::AllHandlesInUse)?;
 
-        cb_handle
-    }
-
-    fn encode_handle(notif_handle: notif::Handle, cb_handle: u32) -> CallbackHandle {
-        ((notif_handle as usize) << 32) | cb_handle as usize
-    }
-
-    fn decode_handle(handle: CallbackHandle) -> (notif::Handle, u32) {
-        let high = (handle >> 32) as u32;
-        let low = (handle & u32::MAX as usize) as u32;
-
-        (high, low)
+            Ok(cb_handle)
+        }
     }
 
     fn add_callback(
         &mut self, notif_handle: notif::Handle, callback: NotifCallback,
     ) -> Result<CallbackHandle> {
-        let cb_handle = self.create_internal_handle();
+        let cb_handle = self.new_callback_handle()?;
 
-        let mut cbs = self.callbacks.write().ctx("registering notificaiton callback")?;
+        let recycled_handles = &mut self.recycled_handles;
+        let mut cbs = self.callbacks
+            .write()
+            .ctx("registering notificaiton callback")
+            .inspect_err(|_| recycled_handles.push_back(cb_handle))?;
+
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             cb_map.insert(cb_handle, callback);
         } else {
@@ -612,15 +637,16 @@ impl ClientNotificationWorker {
             cbs.insert(notif_handle, map);
         }
 
-        Ok(Self::encode_handle(notif_handle, cb_handle))
+        Ok(CallbackHandle { notif_handle, cb_handle })
     }
 
-    fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
-        let (notif_handle, cb_handle) = Self::decode_handle(handle);
+    fn remove_callback(&mut self, handle: CallbackHandle) -> Result<()> {
+        let CallbackHandle { notif_handle, cb_handle } = handle;
         let mut cbs = self.callbacks.write().ctx("deregistering notification callback")?;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             let _ = cb_map.remove(&cb_handle);
+            self.recycled_handles.push_back(cb_handle);
         }
 
         Ok(())
@@ -1126,6 +1152,40 @@ impl Device<'_> {
         self.client
             .communicate(Command::WriteControl, self.addr, &[data.as_bytes()], &mut [])?;
         Ok(())
+    }
+
+    /// Registers a notification request with the ADS server and registers a
+    /// callback with local client.
+    /// The callback will be invoked callback when the client receives a
+    /// notification with data for the given symbol descriptors.
+    ///
+    /// This is a quick method to acheive reactivity to remote symbol updates.
+    /// An alternative strategy would require registerig a notification with
+    /// the ADS server and filtering the global notification stream.
+    ///
+    /// _Note: You may see better performance using the above-mentioned_
+    /// _manual reactivity strategy. See `ads::Device::add_notification` and_
+    /// _`ads::Client::get_notification_channel`_
+    #[must_use]
+    pub fn register_callback<F>(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        attributes: &notif::Attributes,
+        callback: F
+    ) -> Result<CallbackHandle>
+    where
+        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static
+    {
+        let notif_handle = self.add_notification(index_group, index_offset, attributes)?;
+        self.client.register_callback(notif_handle, callback)
+    }
+
+    /// Deregister a notification callback.
+    /// If the handle was already removed or otherwise doesn't exist, this is
+    /// a no-op and returns `Ok(())`
+    pub fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
+        self.client.remove_callback(handle)
     }
 
     /// Add a notification handle for some index group/offset.

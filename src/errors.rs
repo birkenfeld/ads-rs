@@ -2,6 +2,8 @@
 
 use std::sync::LockResult;
 
+use zerocopy::AllocError;
+
 /// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -32,6 +34,12 @@ pub enum Error {
     #[error("internal state corrupted by a poisoned lock: {0} ({1})")]
     Poisoned(&'static str, String),
 
+    /// Exhausted all unique callback handles; this is most likely a logic
+    /// error, as callback handles are reclaimed for reuse after
+    /// deregistration.
+    #[error("exhausted all available unique callback handles; this is most likely a logic error, check your code")]
+    AllHandlesInUse,
+
     /// An unspecified catch-all error
     #[error("an error occured: {0}")]
     Other(&'static str),
@@ -47,6 +55,7 @@ impl Clone for Error {
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
             Poisoned(ctx, e) => Poisoned(ctx, e.clone()),
+            AllHandlesInUse => AllHandlesInUse
             Other(ctx) => Other(ctx),
         }
     }
