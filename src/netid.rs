@@ -37,10 +37,9 @@ impl AmsNetId {
     }
 
     /// Create a NetID from a slice (which must have length 6).
-    pub const fn from_slice(slice: &[u8]) -> Option<Self> {
-        if slice.len() == 6 {
-            let mut addr = [0; 6];
-            addr.copy_from_slice(slice);
+    pub const fn from_slice(s: &[u8]) -> Option<Self> {
+        if s.len() == 6 {
+            let addr = [s[0], s[1], s[2], s[3], s[4], s[5]];
             Some(AmsNetId(addr))
         } else {
             None
