@@ -431,14 +431,14 @@ impl Server {
         let len = request.length.get() as usize;
         let grp = request.index_group.get();
 
-        if !(grp == index::PLC_RW_M || (grp == index::RW_SYMVAL_BYHANDLE && off == 77)) {
-            return (vec![], 0x702);
-        } else if off + len > self.data.len() {
-            return (vec![], 0x703);
+        match grp {
+            index::PLC_RW_M => (),
+            index::RW_SYMVAL_BYHANDLE if off == 77 => off = 1020,
+            _ => return (vec![], 0x702)
         }
 
-        if grp == index::RW_SYMVAL_BYHANDLE {
-            off = 1020;
+        if off + len > self.data.len() {
+            return (vec![], 0x703);
         }
 
         self.notif = Some((off, len));
