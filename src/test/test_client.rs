@@ -170,12 +170,8 @@ fn test_symbolaccess() {
 }
 
 const NOTIF_DUR: Duration = Duration::from_secs(1);
-const NOTIF_ATTR: notif::Attributes = notif::Attributes::new(
-    4,
-    notif::TransmissionMode::ServerOnChange,
-    NOTIF_DUR,
-    NOTIF_DUR
-);
+const NOTIF_ATTR: notif::Attributes =
+    notif::Attributes::new(4, notif::TransmissionMode::ServerOnChange, NOTIF_DUR, NOTIF_DUR);
 
 #[test]
 fn test_callback_called_after_dropping_forgotten_handle() {

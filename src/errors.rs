@@ -40,8 +40,8 @@ pub enum Error {
     )]
     AllHandlesInUse,
 
-    #[error("background notification loop encountered an error: {0}")]
     /// Error occurred while servicing notifications
+    #[error("background notification loop encountered an error: {0}")]
     NotificationLoop(&'static str),
 
     /// An unspecified catch-all error

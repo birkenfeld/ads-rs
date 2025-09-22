@@ -8,7 +8,10 @@ use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
-use std::sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc, Mutex,
+};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -138,7 +141,7 @@ impl Drop for CallbackHandle {
 
 impl CallbackHandle {
     fn new(notif_handle: u32, cb_handle: u32, drop_tx: Option<Sender<CbHandle>>) -> Self {
-        Self { handle: CbHandle { notif_handle, cb_handle }, drop_tx, }
+        Self { handle: CbHandle { notif_handle, cb_handle }, drop_tx }
     }
 
     /// Returns the underlying notification handle
@@ -623,7 +626,9 @@ impl ClientNotificationWorker {
         let c_callbacks = self.callbacks.clone();
         let c_h_return = self.recycled_handles.clone();
         let c_flag = self.stop_flag.clone();
-        self.worker = Some(std::thread::spawn(move || Self::notif_work(notif_rx, drop_rx, c_callbacks, c_h_return, c_flag)));
+        self.worker = Some(std::thread::spawn(move || {
+            Self::notif_work(notif_rx, drop_rx, c_callbacks, c_h_return, c_flag)
+        }));
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -639,12 +644,7 @@ impl ClientNotificationWorker {
     }
 
     fn new_callback_handle(&mut self) -> Result<u32> {
-        if let Some(handle) = self
-            .recycled_handles
-            .lock()
-            .ctx("retreiving recycled handle")?
-            .pop_front()
-        {
+        if let Some(handle) = self.recycled_handles.lock().ctx("retreiving recycled handle")?.pop_front() {
             Ok(handle)
         } else {
             let cb_handle = self.callback_handle_counter;
@@ -661,18 +661,14 @@ impl ClientNotificationWorker {
         let cb_handle = self.new_callback_handle()?;
 
         let recycled_handles = &mut self.recycled_handles;
-        let mut cbs = self
-            .callbacks
-            .lock()
-            .ctx("registering notification callback")
-            .or_else(|err| {
-                recycled_handles
-                    .lock()
-                    .ctx("multiple failures to lock during callback registration, something is very wrong")?
-                    .push_back(cb_handle);
+        let mut cbs = self.callbacks.lock().ctx("registering notification callback").or_else(|err| {
+            recycled_handles
+                .lock()
+                .ctx("multiple failures to lock during callback registration, something is very wrong")?
+                .push_back(cb_handle);
 
-                Err(err)
-            })?;
+            Err(err)
+        })?;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             cb_map.insert(cb_handle, callback);
@@ -691,7 +687,7 @@ impl ClientNotificationWorker {
     }
 
     fn remove_callback_internal(
-        handle: CbHandle, map: &CallbackMap, handle_return: &Arc<Mutex<VecDeque<u32>>>
+        handle: CbHandle, map: &CallbackMap, handle_return: &Arc<Mutex<VecDeque<u32>>>,
     ) -> Result<()> {
         let mut cbs = map.lock().ctx("deregistering notification callback")?;
         let CbHandle { notif_handle, cb_handle } = handle;
@@ -708,8 +704,8 @@ impl ClientNotificationWorker {
     }
 
     fn notif_work(
-        notif_rx: Receiver<notif::Notification>, drop_rx: Receiver<CbHandle>,
-        callbacks: CallbackMap, handle_return: Arc<Mutex<VecDeque<u32>>>, stop_flag: Arc<AtomicBool>
+        notif_rx: Receiver<notif::Notification>, drop_rx: Receiver<CbHandle>, callbacks: CallbackMap,
+        handle_return: Arc<Mutex<VecDeque<u32>>>, stop_flag: Arc<AtomicBool>,
     ) -> Result<()> {
         loop {
             select! {
@@ -739,7 +735,7 @@ impl ClientNotificationWorker {
             }
 
             if stop_flag.load(Ordering::Relaxed) {
-                return Ok(())
+                return Ok(());
             }
         }
     }
