@@ -149,6 +149,11 @@ impl Drop for Client {
             .get_mut()
             .expect("notification handle cache lock was poisoned");
 
+        // Close all open notification handles.
+        for (addr, handle) in std::mem::take(handles) {
+            let _ = self.device(addr).delete_notification(handle);
+        }
+
         if let Ok(ref mut socket) = self.socket.lock() {
             // Remove our port from the router, if necessary.
             if self.source_port_opened {
@@ -161,11 +166,6 @@ impl Drop for Client {
         }
 
         self.receiver.stop();
-
-        // Close all open notification handles.
-        for (addr, handle) in std::mem::take(handles) {
-            let _ = self.device(addr).delete_notification(handle);
-        }
     }
 }
 
