@@ -8,11 +8,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{atomic::{AtomicBool, AtomicU32, Ordering}, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -158,9 +154,6 @@ impl CallbackHandle {
     pub fn forget(&mut self) {
         self.drop_tx.take();
     }
-
-    /// Deregisters the callback manually, consuming this handle
-    pub fn remove_callback(self) { }
 }
 
 /// Represents a connection to a ADS server.
@@ -689,7 +682,7 @@ impl ClientNotificationWorker {
             cbs.insert(notif_handle, map);
         }
 
-        Ok(CallbackHandle::new(notif_handle, cb_handle, Some(self.drop_tx.as_ref().cloned().unwrap())))
+        Ok(CallbackHandle::new(notif_handle, cb_handle, self.drop_tx.as_ref().cloned()))
     }
 
     fn remove_callback(&mut self, mut handle: CallbackHandle) -> Result<()> {
