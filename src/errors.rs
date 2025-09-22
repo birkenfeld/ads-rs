@@ -1,5 +1,7 @@
 //! Defines ADS error types.
 
+use std::sync::LockResult;
+
 /// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -26,6 +28,10 @@ pub enum Error {
     #[error("failed during synchronization of an Ads request/response: {0} ({1})")]
     IoSync(&'static str, &'static str, u32),
 
+    /// Corrupted by a thread that panicked while holding an unlocked mutex
+    #[error("internal state corrupted by a poisoned lock: {0} ({1})")]
+    Poisoned(&'static str, String),
+
     /// An unspecified catch-all error
     #[error("an error occured: {0}")]
     Other(&'static str),
@@ -40,6 +46,7 @@ impl Clone for Error {
             Reply(ctx, e, i) => Reply(ctx, e, *i),
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
+            Poisoned(ctx, e) => Poisoned(ctx, e.clone()),
             Other(ctx) => Other(ctx),
         }
     }
@@ -54,6 +61,13 @@ impl<T> ErrContext for std::result::Result<T, std::io::Error> {
     type Success = T;
     fn ctx(self, context: &'static str) -> Result<Self::Success> {
         self.map_err(|e| Error::Io(context, e))
+    }
+}
+
+impl<T> ErrContext for LockResult<T> {
+    type Success = T;
+    fn ctx(self, context: &'static str) -> Result<Self::Success> {
+        self.map_err(|e| Error::Poisoned(context, e.to_string()))
     }
 }
 
