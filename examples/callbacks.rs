@@ -1,4 +1,3 @@
-use std::sync::mpsc::channel;
 use std::time::Duration;
 
 use ads::{
@@ -7,6 +6,7 @@ use ads::{
     AmsAddr, AmsNetId, Client, Source, Timeouts,
 };
 use zerocopy::{TryFromBytes, LE, U32};
+use crossbeam_channel::unbounded;
 
 const AMS_ADDR: AmsAddr = AmsAddr::new(AmsNetId([5, 62, 215, 36, 1, 1]), 851);
 const NOTIF_ATTR: Attributes = Attributes::new(
@@ -20,7 +20,7 @@ fn main() {
     let client = Client::new(("127.0.0.1", ads::PORT), Timeouts::none(), Source::Request).unwrap();
 
     let dev = client.device(AMS_ADDR);
-    let (tx, rx) = channel();
+    let (tx, rx) = unbounded();
     let cb_handle = dev
         .add_callback(index::PLC_RW_M, 0, &NOTIF_ATTR, move |sample| {
             tx.send(sample.data.to_vec()).unwrap();
