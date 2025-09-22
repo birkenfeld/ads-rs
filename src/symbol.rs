@@ -33,7 +33,7 @@ impl<'c> Handle<'c> {
     /// notification with data for the given symbol descriptors.
     ///
     /// This is a quick method to acheive reactivity to remote symbol updates.
-    /// An alternative strategy would require registerig a notification with
+    /// An alternative strategy would require registering a notification with
     /// the ADS server and filtering the global notification stream.
     ///
     /// _Note: You may see better performance using the above-mentioned_
