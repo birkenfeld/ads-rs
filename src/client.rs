@@ -2,10 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
-use std::io::{Read, Write};
+use std::fmt::Debug;
+use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::RwLock;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex,
@@ -16,7 +18,6 @@ use std::time::Duration;
 use byteorder::{ByteOrder, LE};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use itertools::Itertools;
-use oneshot::RecvTimeoutError;
 
 use crate::errors::{ads_error, ErrContext};
 use crate::notif;
@@ -26,6 +27,11 @@ use zerocopy::byteorder::little_endian::{U16, U32};
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
 type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>>>>;
+
+type NotifCallback = Box<dyn for<'data> Fn(&'data notif::Sample) + Send + Sync>;
+type CallbackMap = Arc<RwLock<BTreeMap<notif::Handle, BTreeMap<u32, NotifCallback>>>>;
+
+type CallbackHandle = usize;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -117,7 +123,6 @@ pub enum Source {
 /// The Client's communication methods use `&self`, so that it can be freely
 /// shared within one thread, or sent, between threads.  Wrappers such as
 /// `Device` or `symbol::Handle` use a `&Client` as well.
-#[derive(Debug)]
 pub struct Client {
     /// TCP connection (duplicated with the reader)
     socket: Mutex<TcpStream>,
@@ -136,8 +141,42 @@ pub struct Client {
     notif_handles: Mutex<BTreeSet<(AmsAddr, notif::Handle)>>,
     /// IO receiver
     receiver: ClientReceiver,
+    /// Resources associated with a notification worker loop
+    notif_work: Mutex<Option<ClientNotificationWorker>>,
     /// If we opened our local port with the router
     source_port_opened: bool,
+}
+
+impl Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct ClientDebugAdapter<'c> {
+            socket: &'c Mutex<TcpStream>,
+            invoke_id: &'c AtomicU32,
+            read_timeout: &'c Option<Duration>,
+            source: &'c AmsAddr,
+            pending: &'c PendingMap,
+            notif_recv: &'c Receiver<notif::Notification>,
+            notif_handles: &'c Mutex<BTreeSet<(AmsAddr, notif::Handle)>>,
+            receiver: &'c ClientReceiver,
+            source_port_opened: &'c bool,
+        }
+
+        let dbg_repr = ClientDebugAdapter {
+            socket: &self.socket,
+            invoke_id: &self.invoke_id,
+            read_timeout: &self.read_timeout,
+            source: &self.source,
+            pending: &self.pending,
+            notif_recv: &self.notif_recv,
+            notif_handles: &self.notif_handles,
+            receiver: &self.receiver,
+            source_port_opened: &self.source_port_opened,
+        };
+
+        Debug::fmt(&dbg_repr, f)
+    }
 }
 
 impl Drop for Client {
@@ -152,6 +191,12 @@ impl Drop for Client {
         // Close all open notification handles.
         for (addr, handle) in std::mem::take(handles) {
             let _ = self.device(addr).delete_notification(handle);
+        }
+
+        if let Ok(mut notif_work) = self.notif_work.lock() {
+            if let Some(mut worker) = notif_work.take() {
+                let _ = worker.stop();
+            }
         }
 
         if let Ok(ref mut socket) = self.socket.lock() {
@@ -258,7 +303,7 @@ impl Client {
         // bidirectional communication.
         let (notif_tx, notif_rx) = unbounded();
 
-        let pending = Arc::new(Mutex::new(BTreeMap::new()));
+        let pending = PendingMap::default();
 
         // Start the reader thread.
         let mut receiver = ClientReceiver::default();
@@ -275,6 +320,7 @@ impl Client {
             invoke_id: AtomicU32::new(1),
             read_timeout: timeouts.read,
             notif_handles: Mutex::default(),
+            notif_work: Mutex::new(None),
         })
     }
 
@@ -369,7 +415,7 @@ impl Client {
                     return Err(e);
                 }
 
-                Err(RecvTimeoutError::Disconnected) => {
+                Err(oneshot::RecvTimeoutError::Disconnected) => {
                     self.discard_pending_request(&dispatched_invoke_id);
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
@@ -378,10 +424,12 @@ impl Client {
                     ));
                 }
 
-                Err(RecvTimeoutError::Timeout) => {
+                Err(oneshot::RecvTimeoutError::Timeout) => {
                     self.discard_pending_request(&dispatched_invoke_id);
-                    return Err(std::io::ErrorKind::TimedOut.into())
-                        .ctx("waiting for response to dispatched request");
+                    return Err(Error::Io(
+                        "waiting for response to dispatched request",
+                        ErrorKind::TimedOut.into(),
+                    ));
                 }
             },
 
@@ -475,12 +523,132 @@ impl Client {
         Ok(resp_buf.len())
     }
 
+    /// Register a callback to be invoked when a notification is received
+    /// for the specified handle
+    pub fn register_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
+    where
+        F: for<'data> Fn(&'data notif::Sample) + Send + Sync + 'static,
+    {
+        self.notif_work
+            .lock()
+            .ctx("registering nofitication callback")?
+            .get_or_insert_with(|| {
+                let mut worker = ClientNotificationWorker::default();
+                worker.start(self.notif_recv.clone());
+                worker
+            })
+            .add_callback(handle, Box::new(callback))
+    }
+
+    /// Deregister a notification callback.
+    /// If the handle doesn't exist or was already removed, this is a no-op
+    pub fn deregister_callback(&self, handle: CallbackHandle) -> Result<()> {
+        if let Some(worker) = self.notif_work.lock().ctx("deregistering notification callback")?.as_mut() {
+            worker.remove_callback(handle)
+        } else {
+            Ok(())
+        }
+    }
+
     fn insert_pending_request(&self, id: u32, tx: oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>) {
         self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
     }
 
     fn discard_pending_request(&self, id: &u32) {
         self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
+    }
+}
+
+#[derive(Default)]
+struct ClientNotificationWorker {
+    worker: Option<JoinHandle<Result<()>>>,
+    callback_handle_counter: u32,
+    callbacks: CallbackMap,
+}
+
+impl ClientNotificationWorker {
+    fn start(&mut self, notif_rx: Receiver<notif::Notification>) {
+        let c_callbacks = self.callbacks.clone();
+        self.worker = Some(std::thread::spawn(move || Self::notif_work(notif_rx, c_callbacks)));
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        if let Some(handle) = self.worker.take() {
+            handle.join().unwrap_or(Ok(()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn create_internal_handle(&mut self) -> u32 {
+        let cb_handle = self.callback_handle_counter;
+        self.callback_handle_counter += 1;
+
+        cb_handle
+    }
+
+    fn encode_handle(notif_handle: notif::Handle, cb_handle: u32) -> CallbackHandle {
+        ((notif_handle as usize) << 32) | cb_handle as usize
+    }
+
+    fn decode_handle(handle: CallbackHandle) -> (notif::Handle, u32) {
+        let high = (handle >> 32) as u32;
+        let low = (handle & u32::MAX as usize) as u32;
+
+        (high, low)
+    }
+
+    fn add_callback(
+        &mut self, notif_handle: notif::Handle, callback: NotifCallback,
+    ) -> Result<CallbackHandle> {
+        let cb_handle = self.create_internal_handle();
+
+        let mut cbs = self.callbacks.write().ctx("registering notificaiton callback")?;
+        if let Some(cb_map) = cbs.get_mut(&notif_handle) {
+            cb_map.insert(cb_handle, callback);
+        } else {
+            let mut map = BTreeMap::new();
+            map.insert(cb_handle, callback);
+            cbs.insert(notif_handle, map);
+        }
+
+        Ok(Self::encode_handle(notif_handle, cb_handle))
+    }
+
+    fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
+        let (notif_handle, cb_handle) = Self::decode_handle(handle);
+        let mut cbs = self.callbacks.write().ctx("deregistering notification callback")?;
+
+        if let Some(cb_map) = cbs.get_mut(&notif_handle) {
+            let _ = cb_map.remove(&cb_handle);
+        }
+
+        Ok(())
+    }
+
+    fn notif_work(recv: Receiver<notif::Notification>, callbacks: CallbackMap) -> Result<()> {
+        for notif in recv.iter() {
+            let cbs = callbacks.read().ctx("invoking notification callbacks")?;
+
+            for sample in notif.samples() {
+                let cb_map = match cbs.get(&sample.handle) {
+                    Some(map) => map,
+                    None => continue,
+                };
+
+                for (_, cb) in cb_map.iter() {
+                    cb(&sample)
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for ClientNotificationWorker {
+    fn drop(&mut self) {
+        let _ = self.stop();
     }
 }
 
@@ -543,7 +711,7 @@ impl ClientReceiver {
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
-            let ads_header = match packet_len {
+            let ads_header: AdsHeader = match packet_len {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
@@ -558,7 +726,9 @@ impl ClientReceiver {
                     socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")?;
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
-                        .map_err(|_| std::io::ErrorKind::InvalidData.into())
+                        .map_err(|_| {
+                            <ErrorKind as Into<std::io::Error>>::into(std::io::ErrorKind::InvalidData)
+                        })
                         .ctx("decoding AMS header")?
                 }
             };
