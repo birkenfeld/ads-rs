@@ -25,6 +25,10 @@ pub enum Error {
     /// Error occurred during IO synchronization
     #[error("failed during synchronization of an Ads request/response: {0} ({1})")]
     IoSync(&'static str, &'static str, u32),
+
+    /// An unspecified catch-all error
+    #[error("an error occured: {0}")]
+    Other(&'static str),
 }
 
 impl Clone for Error {
@@ -36,6 +40,7 @@ impl Clone for Error {
             Reply(ctx, e, i) => Reply(ctx, e, *i),
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
+            Other(ctx) => Other(ctx),
         }
     }
 }
