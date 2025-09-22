@@ -5,8 +5,8 @@ use ads::{
     notif::{Attributes, TransmissionMode},
     AmsAddr, AmsNetId, Client, Source, Timeouts,
 };
-use zerocopy::{TryFromBytes, LE, U32};
 use crossbeam_channel::unbounded;
+use zerocopy::{TryFromBytes, LE, U32};
 
 const AMS_ADDR: AmsAddr = AmsAddr::new(AmsNetId([5, 62, 215, 36, 1, 1]), 851);
 const NOTIF_ATTR: Attributes = Attributes::new(
