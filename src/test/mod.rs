@@ -434,7 +434,7 @@ impl Server {
         match grp {
             index::PLC_RW_M => (),
             index::RW_SYMVAL_BYHANDLE if off == 77 => off = 1020,
-            _ => return (vec![], 0x702)
+            _ => return (vec![], 0x702),
         }
 
         if off + len > self.data.len() {
