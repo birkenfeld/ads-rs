@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use crate::test::{config_test_server, ServerOpts};
-use crate::{index, AmsAddr, AmsNetId, Client, Device, Error, Source, Timeouts};
+use crate::{index, notif, AmsAddr, AmsNetId, Client, Device, Error, Source, Timeouts};
 
 fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
     let timeouts = if let Some(tmo) = opts.timeout { Timeouts::new(tmo) } else { Timeouts::none() };
@@ -169,9 +169,16 @@ fn test_symbolaccess() {
     })
 }
 
+const NOTIF_DUR: Duration = Duration::from_secs(1);
+const NOTIF_ATTR: notif::Attributes = notif::Attributes::new(
+    4,
+    notif::TransmissionMode::ServerOnChange,
+    NOTIF_DUR,
+    NOTIF_DUR
+);
+
 #[test]
-fn test_handle_callback_registration() {
-    use crate::notif::*;
+fn test_callback_called_after_dropping_forgotten_handle() {
     use crossbeam_channel::unbounded;
     use std::time::Duration;
 
@@ -179,12 +186,80 @@ fn test_handle_callback_registration() {
         let handle = device.handle("SYMBOL").unwrap();
         handle.write(&[4, 4, 1, 1]).unwrap();
 
-        const NOTIF_ATTR: Attributes = Attributes::new(
-            4,
-            TransmissionMode::ServerOnChange,
-            Duration::from_millis(1),
-            Duration::from_millis(1),
+        let (tx, rx) = unbounded();
+
+        {
+            handle
+                .add_callback(&NOTIF_ATTR, move |sample| {
+                    let _ = tx.send(sample.data.to_vec());
+                })
+                .unwrap()
+                .forget();
+        }
+
+        handle.write(&[8, 8, 1, 1]).unwrap();
+
+        let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let end_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        // can't verify that tx disconnected since the callback was leaked
+
+        let samples = [&start_state[..], &end_state[..]];
+
+        assert!(
+            matches!(samples, [[4, 4, 1, 1], [8, 8, 1, 1]]),
+            "sample data didn't match the start and/or end states ({:?})",
+            samples
         );
+    })
+}
+
+#[test]
+fn test_callback_not_called_after_forget_and_manual_removal() {
+    use crossbeam_channel::unbounded;
+    use std::time::Duration;
+
+    run_test(ServerOpts::default(), |device| {
+        let handle = device.handle("SYMBOL").unwrap();
+        handle.write(&[4, 4, 1, 1]).unwrap();
+
+        let (tx, rx) = unbounded();
+        let mut cb_handle = handle
+            .add_callback(&NOTIF_ATTR, move |sample| {
+                let _ = tx.send(sample.data.to_vec());
+            })
+            .unwrap();
+
+        cb_handle.forget();
+
+        handle.write(&[8, 8, 1, 1]).unwrap();
+
+        let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let end_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        device.remove_callback(cb_handle).unwrap();
+
+        let recv_err = rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        assert!(recv_err.is_disconnected(), "callback is still alive");
+
+        let samples = [&start_state[..], &end_state[..]];
+
+        assert!(
+            matches!(samples, [[4, 4, 1, 1], [8, 8, 1, 1]]),
+            "sample data didn't match the start and/or end states ({:?})",
+            samples
+        );
+    })
+}
+
+#[test]
+fn test_handle_callback_registration() {
+    use crossbeam_channel::unbounded;
+    use std::time::Duration;
+
+    run_test(ServerOpts::default(), |device| {
+        let handle = device.handle("SYMBOL").unwrap();
+        handle.write(&[4, 4, 1, 1]).unwrap();
 
         let (tx, rx) = unbounded();
         let cb_handle = handle
@@ -201,7 +276,7 @@ fn test_handle_callback_registration() {
         handle.remove_callback(cb_handle).unwrap();
 
         let recv_err = rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
-        assert!(recv_err.is_disconnected(), "callback closure data wasn't dropped correctly");
+        assert!(recv_err.is_disconnected(), "callback is still alive");
 
         let samples = [&start_state[..], &end_state[..]];
 
@@ -215,19 +290,11 @@ fn test_handle_callback_registration() {
 
 #[test]
 fn test_device_callback_registration() {
-    use crate::notif::*;
     use crossbeam_channel::unbounded;
     use std::time::Duration;
 
     run_test(ServerOpts::default(), |device| {
         device.write(index::PLC_RW_M, 0, &[4, 4, 1, 1]).unwrap();
-
-        const NOTIF_ATTR: Attributes = Attributes::new(
-            4,
-            TransmissionMode::ServerOnChange,
-            Duration::from_millis(1),
-            Duration::from_millis(1),
-        );
 
         let (tx, rx) = unbounded();
         let cb_handle = device
@@ -244,7 +311,7 @@ fn test_device_callback_registration() {
         device.remove_callback(cb_handle).unwrap();
 
         let recv_err = rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
-        assert!(recv_err.is_disconnected(), "callback closure data wasn't dropped correctly");
+        assert!(recv_err.is_disconnected(), "callback is still alive");
 
         let samples = [&start_state[..], &end_state[..]];
 
@@ -257,19 +324,11 @@ fn test_device_callback_registration() {
 
 #[test]
 fn test_notification() {
-    use crate::notif::*;
-    use std::time::Duration;
     run_test(ServerOpts::default(), |device| {
         let chan = device.client.get_notification_channel();
 
-        let attrib = Attributes::new(
-            4,
-            TransmissionMode::ServerOnChange,
-            Duration::from_secs(1),
-            Duration::from_secs(1),
-        );
         device.write(index::PLC_RW_M, 0, &[4, 4, 1, 1]).unwrap();
-        let handle = device.add_notification(index::PLC_RW_M, 0, &attrib).unwrap();
+        let handle = device.add_notification(index::PLC_RW_M, 0, &NOTIF_ATTR).unwrap();
         device.write(index::PLC_RW_M, 0, &[8, 8, 1, 1]).unwrap();
         device.delete_notification(handle).unwrap();
 
@@ -283,12 +342,12 @@ fn test_notification() {
         let mut samples = first.samples();
         assert_eq!(
             samples.next().unwrap(),
-            Sample { handle, timestamp: 0x9988776655443322, data: &[4, 4, 1, 1] }
+            notif::Sample { handle, timestamp: 0x9988776655443322, data: &[4, 4, 1, 1] }
         );
         assert_eq!(samples.next(), None);
         assert_eq!(
             second.samples().next().unwrap(),
-            Sample { handle, timestamp: 0x9988776655443322, data: &[8, 8, 1, 1] }
+            notif::Sample { handle, timestamp: 0x9988776655443322, data: &[8, 8, 1, 1] }
         );
     })
 }

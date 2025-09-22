@@ -40,6 +40,10 @@ pub enum Error {
     )]
     AllHandlesInUse,
 
+    #[error("background notification loop encountered an error: {0}")]
+    /// Error occurred while servicing notifications
+    NotificationLoop(&'static str),
+
     /// An unspecified catch-all error
     #[error("an error occured: {0}")]
     Other(&'static str),
@@ -56,6 +60,7 @@ impl Clone for Error {
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
             Poisoned(ctx, e) => Poisoned(ctx, e.clone()),
             AllHandlesInUse => AllHandlesInUse,
+            NotificationLoop(ctx) => NotificationLoop(ctx),
             Other(ctx) => Other(ctx),
         }
     }
@@ -70,6 +75,13 @@ impl<T> ErrContext for std::result::Result<T, std::io::Error> {
     type Success = T;
     fn ctx(self, context: &'static str) -> Result<Self::Success> {
         self.map_err(|e| Error::Io(context, e))
+    }
+}
+
+impl<T> ErrContext for std::result::Result<T, crossbeam_channel::RecvError> {
+    type Success = T;
+    fn ctx(self, context: &'static str) -> Result<Self::Success> {
+        self.map_err(|_| Error::NotificationLoop(context))
     }
 }
 

@@ -3,10 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
     Arc, Mutex,
@@ -15,7 +17,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LE};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{select, unbounded, Receiver, Sender};
 use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
@@ -115,19 +117,50 @@ pub enum Source {
     Request,
 }
 
-/// A unique handle to a callback registration held by an `ads::Client`
-/// instance.
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-pub struct CallbackHandle {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct CbHandle {
     notif_handle: u32,
     cb_handle: u32,
 }
 
+/// A smart handle to a callback registration held by an `ads::Client`
+/// instance.
+///
+/// On drop, the associated callback is deregistered, unless
+/// `CallbackHandle::forget(&mut self)` was previously called
+#[derive(Debug)]
+pub struct CallbackHandle {
+    handle: CbHandle,
+    drop_tx: Option<Sender<CbHandle>>,
+}
+
+impl Drop for CallbackHandle {
+    fn drop(&mut self) {
+        self.drop_tx.take().map(|tx| tx.send(self.handle));
+    }
+}
+
 impl CallbackHandle {
+    fn new(notif_handle: u32, cb_handle: u32, drop_tx: Option<Sender<CbHandle>>) -> Self {
+        Self { handle: CbHandle { notif_handle, cb_handle }, drop_tx, }
+    }
+
     /// Returns the underlying notification handle
     pub fn notification_handle(&self) -> notif::Handle {
-        self.notif_handle
+        self.handle.notif_handle
     }
+
+    /// Prevents this callback from being deregistered on drop.
+    ///
+    /// This is a resource leak unless the callback is manually
+    /// deregistered using the client or device this handle was derived
+    /// from.
+    pub fn forget(&mut self) {
+        self.drop_tx.take();
+    }
+
+    /// Deregisters the callback manually, consuming this handle
+    pub fn remove_callback(self) { }
 }
 
 /// Represents a connection to a ADS server.
@@ -583,18 +616,28 @@ impl Client {
 #[derive(Default)]
 struct ClientNotificationWorker {
     worker: Option<JoinHandle<Result<()>>>,
-    callback_handle_counter: u32,
+    drop_tx: Option<Sender<CbHandle>>,
     callbacks: CallbackMap,
-    recycled_handles: VecDeque<u32>,
+    recycled_handles: Arc<Mutex<VecDeque<u32>>>,
+    stop_flag: Arc<AtomicBool>,
+    callback_handle_counter: u32,
 }
 
 impl ClientNotificationWorker {
     fn start(&mut self, notif_rx: Receiver<notif::Notification>) {
+        let (drop_tx, drop_rx) = unbounded();
+        self.drop_tx = Some(drop_tx);
         let c_callbacks = self.callbacks.clone();
-        self.worker = Some(std::thread::spawn(move || Self::notif_work(notif_rx, c_callbacks)));
+        let c_h_return = self.recycled_handles.clone();
+        let c_flag = self.stop_flag.clone();
+        self.worker = Some(std::thread::spawn(move || Self::notif_work(notif_rx, drop_rx, c_callbacks, c_h_return, c_flag)));
     }
 
     fn stop(&mut self) -> Result<()> {
+        {
+            let _ = self.drop_tx.take();
+        }
+
         if let Some(handle) = self.worker.take() {
             handle.join().unwrap_or(Ok(()))
         } else {
@@ -603,7 +646,12 @@ impl ClientNotificationWorker {
     }
 
     fn new_callback_handle(&mut self) -> Result<u32> {
-        if let Some(handle) = self.recycled_handles.pop_front() {
+        if let Some(handle) = self
+            .recycled_handles
+            .lock()
+            .ctx("retreiving recycled handle")?
+            .pop_front()
+        {
             Ok(handle)
         } else {
             let cb_handle = self.callback_handle_counter;
@@ -620,10 +668,18 @@ impl ClientNotificationWorker {
         let cb_handle = self.new_callback_handle()?;
 
         let recycled_handles = &mut self.recycled_handles;
-        let mut cbs = self.callbacks.lock().ctx("registering notificaiton callback").map_err(|err| {
-            recycled_handles.push_back(cb_handle);
-            err
-        })?;
+        let mut cbs = self
+            .callbacks
+            .lock()
+            .ctx("registering notification callback")
+            .or_else(|err| {
+                recycled_handles
+                    .lock()
+                    .ctx("multiple failures to lock during callback registration, something is very wrong")?
+                    .push_back(cb_handle);
+
+                Err(err)
+            })?;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             cb_map.insert(cb_handle, callback);
@@ -633,38 +689,66 @@ impl ClientNotificationWorker {
             cbs.insert(notif_handle, map);
         }
 
-        Ok(CallbackHandle { notif_handle, cb_handle })
+        Ok(CallbackHandle::new(notif_handle, cb_handle, Some(self.drop_tx.as_ref().cloned().unwrap())))
     }
 
-    fn remove_callback(&mut self, handle: CallbackHandle) -> Result<()> {
-        let CallbackHandle { notif_handle, cb_handle } = handle;
-        let mut cbs = self.callbacks.lock().ctx("deregistering notification callback")?;
+    fn remove_callback(&mut self, mut handle: CallbackHandle) -> Result<()> {
+        handle.forget();
+        Self::remove_callback_internal(handle.handle, &self.callbacks, &self.recycled_handles)
+    }
+
+    fn remove_callback_internal(
+        handle: CbHandle, map: &CallbackMap, handle_return: &Arc<Mutex<VecDeque<u32>>>
+    ) -> Result<()> {
+        let mut cbs = map.lock().ctx("deregistering notification callback")?;
+        let CbHandle { notif_handle, cb_handle } = handle;
 
         if let Some(cb_map) = cbs.get_mut(&notif_handle) {
             let _ = cb_map.remove(&cb_handle);
-            self.recycled_handles.push_back(cb_handle);
+            handle_return
+                .lock()
+                .ctx("returning deregistered callback handle")?
+                .push_back(cb_handle);
         }
 
         Ok(())
     }
 
-    fn notif_work(recv: Receiver<notif::Notification>, callbacks: CallbackMap) -> Result<()> {
-        for notif in recv.iter() {
-            let mut cbs = callbacks.lock().ctx("invoking notification callbacks")?;
+    fn notif_work(
+        notif_rx: Receiver<notif::Notification>, drop_rx: Receiver<CbHandle>,
+        callbacks: CallbackMap, handle_return: Arc<Mutex<VecDeque<u32>>>, stop_flag: Arc<AtomicBool>
+    ) -> Result<()> {
+        loop {
+            select! {
+                recv(notif_rx) -> result => {
+                    let notif = result.ctx("waiting for notifications")?;
 
-            for sample in notif.samples() {
-                let cb_map = match cbs.get_mut(&sample.handle) {
-                    Some(map) => map,
-                    None => continue,
-                };
+                    let mut cbs = callbacks.lock().ctx("invoking notification callbacks")?;
 
-                for (_, cb) in cb_map.iter_mut() {
-                    cb(&sample)
+                    for sample in notif.samples() {
+                        let cb_map = match cbs.get_mut(&sample.handle) {
+                            Some(map) => map,
+                            None => continue,
+                        };
+
+                        for (_, cb) in cb_map.iter_mut() {
+                            cb(&sample);
+                        }
+                    }
                 }
+
+                recv(drop_rx) -> result => {
+                    let handle = result.ctx("waiting for handles")?;
+                    Self::remove_callback_internal(handle, &callbacks, &handle_return)?;
+                }
+
+                default(Duration::from_millis(10)) => ()
+            }
+
+            if stop_flag.load(Ordering::Relaxed) {
+                return Ok(())
             }
         }
-
-        Ok(())
     }
 }
 
