@@ -1,8 +1,10 @@
 //! Contains the TCP client to connect to an ADS server.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
-use std::io::{Read, Write};
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::io::{ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
@@ -14,18 +16,20 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LE};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, select_biased, unbounded, Receiver, Sender};
 use itertools::Itertools;
-use oneshot::RecvTimeoutError;
 
 use crate::errors::{ads_error, ErrContext};
-use crate::notif;
+use crate::{notif, symbol};
 use crate::{AmsAddr, AmsNetId, Error, Result};
 
 use zerocopy::byteorder::little_endian::{U16, U32};
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes};
 
 type PendingMap = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>>>>;
+
+type NotifCallback = Box<dyn for<'data> FnMut(&'data notif::Sample) + Send + Sync>;
+type CallbackMap = Arc<Mutex<BTreeMap<notif::Handle, BTreeMap<u32, NotifCallback>>>>;
 
 /// An ADS protocol command.
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115847307.html?id=7738940192708835096
@@ -112,12 +116,54 @@ pub enum Source {
     Request,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct CbHandle {
+    notif_handle: u32,
+    cb_handle: u32,
+}
+
+/// A smart handle to a callback registration held by an `ads::Client`
+/// instance.
+///
+/// On drop, the associated callback is deregistered, unless
+/// `CallbackHandle::forget(&mut self)` was previously called
+#[derive(Debug)]
+pub struct CallbackHandle {
+    handle: CbHandle,
+    drop_tx: Option<Sender<CbHandle>>,
+}
+
+impl Drop for CallbackHandle {
+    fn drop(&mut self) {
+        self.drop_tx.take().map(|tx| tx.send(self.handle));
+    }
+}
+
+impl CallbackHandle {
+    fn new(notif_handle: u32, cb_handle: u32, drop_tx: Option<Sender<CbHandle>>) -> Self {
+        Self { handle: CbHandle { notif_handle, cb_handle }, drop_tx }
+    }
+
+    /// Returns the underlying notification handle
+    pub fn notification_handle(&self) -> notif::Handle {
+        self.handle.notif_handle
+    }
+
+    /// Prevents this callback from being deregistered on drop.
+    ///
+    /// This is a resource leak unless the callback is manually
+    /// deregistered using the client or device this handle was derived
+    /// from.
+    pub fn forget(&mut self) {
+        self.drop_tx.take();
+    }
+}
+
 /// Represents a connection to a ADS server.
 ///
 /// The Client's communication methods use `&self`, so that it can be freely
 /// shared within one thread, or sent, between threads.  Wrappers such as
 /// `Device` or `symbol::Handle` use a `&Client` as well.
-#[derive(Debug)]
 pub struct Client {
     /// TCP connection (duplicated with the reader)
     socket: Mutex<TcpStream>,
@@ -136,8 +182,42 @@ pub struct Client {
     notif_handles: Mutex<BTreeSet<(AmsAddr, notif::Handle)>>,
     /// IO receiver
     receiver: ClientReceiver,
+    /// Resources associated with a notification worker loop
+    notif_work: Mutex<Option<ClientNotificationWorker>>,
     /// If we opened our local port with the router
     source_port_opened: bool,
+}
+
+impl Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct ClientDebugAdapter<'c> {
+            socket: &'c Mutex<TcpStream>,
+            invoke_id: &'c AtomicU32,
+            read_timeout: &'c Option<Duration>,
+            source: &'c AmsAddr,
+            pending: &'c PendingMap,
+            notif_recv: &'c Receiver<notif::Notification>,
+            notif_handles: &'c Mutex<BTreeSet<(AmsAddr, notif::Handle)>>,
+            receiver: &'c ClientReceiver,
+            source_port_opened: &'c bool,
+        }
+
+        let dbg_repr = ClientDebugAdapter {
+            socket: &self.socket,
+            invoke_id: &self.invoke_id,
+            read_timeout: &self.read_timeout,
+            source: &self.source,
+            pending: &self.pending,
+            notif_recv: &self.notif_recv,
+            notif_handles: &self.notif_handles,
+            receiver: &self.receiver,
+            source_port_opened: &self.source_port_opened,
+        };
+
+        Debug::fmt(&dbg_repr, f)
+    }
 }
 
 impl Drop for Client {
@@ -152,6 +232,12 @@ impl Drop for Client {
         // Close all open notification handles.
         for (addr, handle) in std::mem::take(handles) {
             let _ = self.device(addr).delete_notification(handle);
+        }
+
+        if let Ok(mut notif_work) = self.notif_work.lock() {
+            if let Some(mut worker) = notif_work.take() {
+                worker.stop();
+            }
         }
 
         if let Ok(ref mut socket) = self.socket.lock() {
@@ -258,7 +344,7 @@ impl Client {
         // bidirectional communication.
         let (notif_tx, notif_rx) = unbounded();
 
-        let pending = Arc::new(Mutex::new(BTreeMap::new()));
+        let pending = PendingMap::default();
 
         // Start the reader thread.
         let mut receiver = ClientReceiver::default();
@@ -275,6 +361,7 @@ impl Client {
             invoke_id: AtomicU32::new(1),
             read_timeout: timeouts.read,
             notif_handles: Mutex::default(),
+            notif_work: Mutex::new(None),
         })
     }
 
@@ -369,7 +456,7 @@ impl Client {
                     return Err(e);
                 }
 
-                Err(RecvTimeoutError::Disconnected) => {
+                Err(oneshot::RecvTimeoutError::Disconnected) => {
                     self.discard_pending_request(&dispatched_invoke_id);
                     return Err(Error::IoSync(
                         "waiting for response to dispatched request",
@@ -378,10 +465,12 @@ impl Client {
                     ));
                 }
 
-                Err(RecvTimeoutError::Timeout) => {
+                Err(oneshot::RecvTimeoutError::Timeout) => {
                     self.discard_pending_request(&dispatched_invoke_id);
-                    return Err(std::io::ErrorKind::TimedOut.into())
-                        .ctx("waiting for response to dispatched request");
+                    return Err(Error::Io(
+                        "waiting for response to dispatched request",
+                        ErrorKind::TimedOut.into(),
+                    ));
                 }
             },
 
@@ -475,12 +564,183 @@ impl Client {
         Ok(resp_buf.len())
     }
 
+    /// Registers a callback to be invoked when a notification is
+    /// received for an already registered symbol descriptor.
+    ///
+    /// This is a quick method to acheive reactivity to remote symbol updates.
+    /// An alternative strategy would require registering a notification with
+    /// the ADS server and filtering the global notification stream.
+    ///
+    /// _Note: You may see better performance using the above-mentioned_
+    /// _manual reactivity strategy. See `ads::Device::add_notification` and_
+    /// _`ads::Client::get_notification_channel`_
+    pub fn add_callback<F>(&self, handle: notif::Handle, callback: F) -> Result<CallbackHandle>
+    where
+        F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
+    {
+        self.notif_work
+            .lock()
+            .ctx("registering nofitication callback")?
+            .get_or_insert_with(|| {
+                let mut worker = ClientNotificationWorker::default();
+                worker.start(self.notif_recv.clone());
+                worker
+            })
+            .add_callback(handle, Box::new(callback))
+    }
+
+    /// Deregister a notification callback.
+    /// If the handle was already removed or otherwise doesn't exist, this is
+    /// a no-op and returns `Ok(())`
+    pub fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
+        if let Some(worker) = self.notif_work.lock().ctx("deregistering notification callback")?.as_mut() {
+            worker.remove_callback(handle)
+        } else {
+            Ok(())
+        }
+    }
+
     fn insert_pending_request(&self, id: u32, tx: oneshot::Sender<Result<(AdsHeader, Vec<u8>)>>) {
         self.pending.lock().expect("pending command map lock poisoned").insert(id, tx);
     }
 
     fn discard_pending_request(&self, id: &u32) {
         self.pending.lock().expect("pending command map lock poisoned").remove_entry(id);
+    }
+}
+
+#[derive(Default)]
+struct ClientNotificationWorker {
+    worker: Option<JoinHandle<Result<()>>>,
+    drop_tx: Option<Sender<CbHandle>>,
+    stop_tx: Option<Sender<()>>,
+    callbacks: CallbackMap,
+    recycled_handles: Arc<Mutex<VecDeque<u32>>>,
+    callback_handle_counter: u32,
+}
+
+impl ClientNotificationWorker {
+    fn start(&mut self, notif_rx: Receiver<notif::Notification>) {
+        let (drop_tx, drop_rx) = unbounded();
+        self.drop_tx = Some(drop_tx);
+
+        let (stop_tx, stop_rx) = bounded(1);
+        self.stop_tx = Some(stop_tx);
+
+        let c_callbacks = self.callbacks.clone();
+        let c_h_return = self.recycled_handles.clone();
+        self.worker = Some(std::thread::spawn(move || {
+            Self::notif_work(notif_rx, drop_rx, c_callbacks, c_h_return, stop_rx)
+        }));
+    }
+
+    fn stop(&mut self) {
+        if let Some(handle) = self.worker.take() {
+            let _ = self.drop_tx.take();
+            let _ = self.stop_tx.take().map(|tx| tx.send(()));
+            let _ = handle.join();
+        }
+    }
+
+    fn new_callback_handle(&mut self) -> Result<u32> {
+        if let Some(handle) = self.recycled_handles.lock().ctx("retreiving recycled handle")?.pop_front() {
+            Ok(handle)
+        } else {
+            let cb_handle = self.callback_handle_counter;
+            self.callback_handle_counter =
+                self.callback_handle_counter.checked_add(1).ok_or(Error::AllHandlesInUse)?;
+
+            Ok(cb_handle)
+        }
+    }
+
+    fn add_callback(
+        &mut self, notif_handle: notif::Handle, callback: NotifCallback,
+    ) -> Result<CallbackHandle> {
+        let cb_handle = self.new_callback_handle()?;
+
+        let recycled_handles = &mut self.recycled_handles;
+        let mut cbs = self.callbacks.lock().ctx("registering notification callback").or_else(|err| {
+            recycled_handles
+                .lock()
+                .ctx("multiple failures to lock during callback registration, something is very wrong")?
+                .push_back(cb_handle);
+
+            Err(err)
+        })?;
+
+        if let Some(cb_map) = cbs.get_mut(&notif_handle) {
+            cb_map.insert(cb_handle, callback);
+        } else {
+            let mut map = BTreeMap::new();
+            map.insert(cb_handle, callback);
+            cbs.insert(notif_handle, map);
+        }
+
+        Ok(CallbackHandle::new(notif_handle, cb_handle, self.drop_tx.as_ref().cloned()))
+    }
+
+    fn remove_callback(&mut self, mut handle: CallbackHandle) -> Result<()> {
+        handle.forget();
+        Self::remove_callback_internal(handle.handle, &self.callbacks, &self.recycled_handles)
+    }
+
+    fn remove_callback_internal(
+        handle: CbHandle, map: &CallbackMap, handle_return: &Arc<Mutex<VecDeque<u32>>>,
+    ) -> Result<()> {
+        let mut cbs = map.lock().ctx("deregistering notification callback")?;
+        let CbHandle { notif_handle, cb_handle } = handle;
+
+        if let Some(cb_map) = cbs.get_mut(&notif_handle) {
+            let _ = cb_map.remove(&cb_handle);
+            handle_return
+                .lock()
+                .ctx("returning deregistered callback handle")?
+                .push_back(cb_handle);
+        }
+
+        Ok(())
+    }
+
+    fn notif_work(
+        notif_rx: Receiver<notif::Notification>, drop_rx: Receiver<CbHandle>, callbacks: CallbackMap,
+        handle_return: Arc<Mutex<VecDeque<u32>>>, stop_rx: Receiver<()>,
+    ) -> Result<()> {
+        loop {
+            select_biased! {
+                recv(stop_rx) -> result => {
+                    return result.ctx("shutting down socket");
+                }
+
+                recv(drop_rx) -> result => {
+                    let handle = result.ctx("waiting for handles")?;
+                    Self::remove_callback_internal(handle, &callbacks, &handle_return)?;
+                }
+
+                recv(notif_rx) -> result => {
+                    let notif = result.ctx("waiting for notifications")?;
+
+                    let mut cbs = callbacks.lock().ctx("invoking notification callbacks")?;
+
+                    for sample in notif.samples() {
+                        let cb_map = match cbs.get_mut(&sample.handle) {
+                            Some(map) => map,
+                            None => continue,
+                        };
+
+                        for (_, cb) in cb_map.iter_mut() {
+                            cb(&sample);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ClientNotificationWorker {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -543,7 +803,7 @@ impl ClientReceiver {
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
-            let ads_header = match packet_len {
+            let ads_header: AdsHeader = match packet_len {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
@@ -558,7 +818,9 @@ impl ClientReceiver {
                     socket_rx.read_exact(&mut ads_header_buf[6..]).ctx("receiving AMS header")?;
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
-                        .map_err(|_| std::io::ErrorKind::InvalidData.into())
+                        .map_err(|_| {
+                            <ErrorKind as Into<std::io::Error>>::into(std::io::ErrorKind::InvalidData)
+                        })
                         .ctx("decoding AMS header")?
                 }
             };
@@ -654,6 +916,13 @@ pub struct Device<'c> {
     /// The underlying `Client`.
     pub client: &'c Client,
     addr: AmsAddr,
+}
+
+impl<'c> Device<'c> {
+    /// Create a handle for the given symbol name in this device's context.
+    pub fn handle(&self, symbol_name: &str) -> Result<symbol::Handle<'c>> {
+        symbol::Handle::new(*self, symbol_name)
+    }
 }
 
 impl Device<'_> {
@@ -956,6 +1225,35 @@ impl Device<'_> {
         self.client
             .communicate(Command::WriteControl, self.addr, &[data.as_bytes()], &mut [])?;
         Ok(())
+    }
+
+    /// Registers a notification request with the ADS server and registers a
+    /// callback with local client.
+    /// The callback will be invoked callback when the client receives a
+    /// notification with data for the given symbol descriptors.
+    ///
+    /// This is a quick method to acheive reactivity to remote symbol updates.
+    /// An alternative strategy would require registering a notification with
+    /// the ADS server and filtering the global notification stream.
+    ///
+    /// _Note: You may see better performance using the above-mentioned_
+    /// _manual reactivity strategy. See `ads::Device::add_notification` and_
+    /// _`ads::Client::get_notification_channel`_
+    pub fn add_callback<F>(
+        &self, index_group: u32, index_offset: u32, attributes: &notif::Attributes, callback: F,
+    ) -> Result<CallbackHandle>
+    where
+        F: for<'data> FnMut(&'data notif::Sample) + Send + Sync + 'static,
+    {
+        let notif_handle = self.add_notification(index_group, index_offset, attributes)?;
+        self.client.add_callback(notif_handle, callback)
+    }
+
+    /// Deregister a notification callback.
+    /// If the handle was already removed or otherwise doesn't exist, this is
+    /// a no-op and returns `Ok(())`
+    pub fn remove_callback(&self, handle: CallbackHandle) -> Result<()> {
+        self.client.remove_callback(handle)
     }
 
     /// Add a notification handle for some index group/offset.

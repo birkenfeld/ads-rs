@@ -427,15 +427,20 @@ impl Server {
             return (vec![], 0x706);
         }
         let request = AddNotif::read_from_bytes(data).unwrap();
-        let off = request.index_offset.get() as usize;
+        let mut off = request.index_offset.get() as usize;
         let len = request.length.get() as usize;
+        let grp = request.index_group.get();
 
-        if request.index_group.get() != index::PLC_RW_M {
-            return (vec![], 0x702);
+        match grp {
+            index::PLC_RW_M => (),
+            index::RW_SYMVAL_BYHANDLE if off == 77 => off = 1020,
+            _ => return (vec![], 0x702),
         }
+
         if off + len > self.data.len() {
             return (vec![], 0x703);
         }
+
         self.notif = Some((off, len));
         let mut out = 0u32.to_le_bytes().to_vec();
         out.write_u32::<LE>(132).unwrap(); // handle
