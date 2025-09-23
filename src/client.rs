@@ -16,7 +16,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LE};
-use crossbeam_channel::{bounded, select, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, select_biased, unbounded, Receiver, Sender};
 use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
@@ -707,7 +707,16 @@ impl ClientNotificationWorker {
         handle_return: Arc<Mutex<VecDeque<u32>>>, stop_rx: Receiver<()>,
     ) -> Result<()> {
         loop {
-            select! {
+            select_biased! {
+                recv(stop_rx) -> result => {
+                    return result.ctx("shutting down socket");
+                }
+
+                recv(drop_rx) -> result => {
+                    let handle = result.ctx("waiting for handles")?;
+                    Self::remove_callback_internal(handle, &callbacks, &handle_return)?;
+                }
+
                 recv(notif_rx) -> result => {
                     let notif = result.ctx("waiting for notifications")?;
 
@@ -723,15 +732,6 @@ impl ClientNotificationWorker {
                             cb(&sample);
                         }
                     }
-                }
-
-                recv(drop_rx) -> result => {
-                    let handle = result.ctx("waiting for handles")?;
-                    Self::remove_callback_internal(handle, &callbacks, &handle_return)?;
-                }
-
-                recv(stop_rx) -> result => {
-                    return result.ctx("shutting down socket");
                 }
             }
         }
