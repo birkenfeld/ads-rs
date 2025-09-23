@@ -236,7 +236,7 @@ impl Drop for Client {
 
         if let Ok(mut notif_work) = self.notif_work.lock() {
             if let Some(mut worker) = notif_work.take() {
-                let _ = worker.stop();
+                worker.stop();
             }
         }
 
