@@ -9,14 +9,14 @@ use std::mem::size_of;
 use std::net::{IpAddr, Shutdown, TcpStream, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicU32, Ordering},
     Arc, Mutex,
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use byteorder::{ByteOrder, LE};
-use crossbeam_channel::{select, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, select, unbounded, Receiver, Sender};
 use itertools::Itertools;
 
 use crate::errors::{ads_error, ErrContext};
@@ -613,9 +613,9 @@ impl Client {
 struct ClientNotificationWorker {
     worker: Option<JoinHandle<Result<()>>>,
     drop_tx: Option<Sender<CbHandle>>,
+    stop_tx: Option<Sender<()>>,
     callbacks: CallbackMap,
     recycled_handles: Arc<Mutex<VecDeque<u32>>>,
-    stop_flag: Arc<AtomicBool>,
     callback_handle_counter: u32,
 }
 
@@ -623,23 +623,22 @@ impl ClientNotificationWorker {
     fn start(&mut self, notif_rx: Receiver<notif::Notification>) {
         let (drop_tx, drop_rx) = unbounded();
         self.drop_tx = Some(drop_tx);
+
+        let (stop_tx, stop_rx) = bounded(1);
+        self.stop_tx = Some(stop_tx);
+
         let c_callbacks = self.callbacks.clone();
         let c_h_return = self.recycled_handles.clone();
-        let c_flag = self.stop_flag.clone();
         self.worker = Some(std::thread::spawn(move || {
-            Self::notif_work(notif_rx, drop_rx, c_callbacks, c_h_return, c_flag)
+            Self::notif_work(notif_rx, drop_rx, c_callbacks, c_h_return, stop_rx)
         }));
     }
 
-    fn stop(&mut self) -> Result<()> {
-        {
-            let _ = self.drop_tx.take();
-        }
-
+    fn stop(&mut self) {
         if let Some(handle) = self.worker.take() {
-            handle.join().unwrap_or(Ok(()))
-        } else {
-            Ok(())
+            let _ = self.drop_tx.take();
+            let _ = self.stop_tx.take().map(|tx| tx.send(()));
+            let _ = handle.join();
         }
     }
 
@@ -705,7 +704,7 @@ impl ClientNotificationWorker {
 
     fn notif_work(
         notif_rx: Receiver<notif::Notification>, drop_rx: Receiver<CbHandle>, callbacks: CallbackMap,
-        handle_return: Arc<Mutex<VecDeque<u32>>>, stop_flag: Arc<AtomicBool>,
+        handle_return: Arc<Mutex<VecDeque<u32>>>, stop_rx: Receiver<()>,
     ) -> Result<()> {
         loop {
             select! {
@@ -731,11 +730,9 @@ impl ClientNotificationWorker {
                     Self::remove_callback_internal(handle, &callbacks, &handle_return)?;
                 }
 
-                default(Duration::from_millis(10)) => ()
-            }
-
-            if stop_flag.load(Ordering::Relaxed) {
-                return Ok(());
+                recv(stop_rx) -> result => {
+                    return result.ctx("shutting down socket");
+                }
             }
         }
     }
@@ -743,7 +740,7 @@ impl ClientNotificationWorker {
 
 impl Drop for ClientNotificationWorker {
     fn drop(&mut self) {
-        let _ = self.stop();
+        self.stop();
     }
 }
 
