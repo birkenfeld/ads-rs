@@ -649,7 +649,7 @@ impl Drop for ClientReceiver {
 }
 
 /// A `Client` wrapper that talks to a specific ADS device.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Device<'c> {
     /// The underlying `Client`.
     pub client: &'c Client,
