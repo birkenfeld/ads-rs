@@ -594,7 +594,9 @@ impl Debug for ClientNotificationWorker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #[derive(Debug)]
         #[allow(dead_code)]
-        struct DbgImpl { callback_handle_counter: u32 }
+        struct DbgImpl {
+            callback_handle_counter: u32,
+        }
 
         DbgImpl { callback_handle_counter: self.callback_handle_counter }.fmt(f)
     }
