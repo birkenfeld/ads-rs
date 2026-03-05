@@ -171,7 +171,7 @@ impl Server {
         ads_header.command.set(crate::client::Command::Notification as u16);
         ads_header.state_flags.set(4);
         ads_header.data_length.set(data_len as u32);
-        println!("not: {ads_header:?}");
+        println!("notif: {ads_header:?}");
 
         socket.write_all(ads_header.as_bytes()).unwrap();
         socket.write_all(notif_header.as_bytes()).unwrap();

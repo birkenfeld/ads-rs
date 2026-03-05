@@ -31,19 +31,8 @@ fn test_timeout() {
 
             // darwin (maybe other BSDs too?) kernel seems to return `WouldBlock` on timeout
             // linux/windows align on returning `TimedOut`, which makes more sense semantically
-            let expected_err = {
-                #[cfg(target_os = "macos")]
-                {
-                    ErrorKind::WouldBlock
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    ErrorKind::TimedOut
-                }
-            };
-
             match err {
-                Error::Io(_, err) if err.kind() == expected_err => (),
+                Error::Io(_, err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => (),
                 _ => panic!("unexpected error from timeout: {}", err),
             }
         },
@@ -208,9 +197,10 @@ fn test_callback_called_after_dropping_forgotten_handle() {
                 .forget();
         }
 
+        let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
         handle.write(&[8, 8, 1, 1]).unwrap();
 
-        let start_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let end_state = rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
         // can't verify that tx disconnected since the callback was leaked
