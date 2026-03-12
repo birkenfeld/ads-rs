@@ -13,12 +13,12 @@ Use with Cargo as usual, no system dependencies are required.
 
 ```toml
 [dependencies]
-ads = "0.4"
+ads = "0.5"
 ```
 
 ### Rust version
 
-Minimum supported Rust version is 1.63.0.
+Minimum supported Rust version is 1.71.0.
 
 ## Usage
 
@@ -68,3 +68,4 @@ routes automatically.
 
 A utility called `adstool` is found under `examples/`, very similar to the one
 provided by [the C++ library](https://github.com/Beckhoff/ADS).
+

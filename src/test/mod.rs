@@ -61,7 +61,7 @@ pub struct ServerOpts {
 }
 
 pub fn config_test_server(opts: ServerOpts) -> u16 {
-    SERVER.with(|obj| {
+    SERVER.with(|obj: &Lazy<(u16, Arc<Mutex<ServerOpts>>)>| {
         let (port, server_opts) = &**obj;
         *server_opts.lock().unwrap() = opts;
         *port
@@ -92,9 +92,18 @@ impl Server {
                 }
                 panic!("unexpected receive error: {}", e);
             }
-            println!(">>> {:?}", header);
+            println!(">>> {header:?}");
             let mut data = vec![0; header.data_length.get() as usize];
             socket.read_exact(&mut data).unwrap();
+
+            if opts.timeout.is_some() {
+                // client shouldn't send any data while testing timeout
+                while socket.read(&mut [0]).is_ok() {
+                    std::hint::spin_loop();
+                }
+
+                return;
+            }
 
             if opts.no_reply {
                 return;
@@ -133,7 +142,7 @@ impl Server {
             if !opts.ignore_invokeid {
                 reply_header.invoke_id = header.invoke_id;
             }
-            println!("<<< {:?}", reply_header);
+            println!("<<< {reply_header:?}");
 
             socket.write_all(reply_header.as_bytes()).unwrap();
             socket.write_all(&reply_data).unwrap();
@@ -162,7 +171,7 @@ impl Server {
         ads_header.command.set(crate::client::Command::Notification as u16);
         ads_header.state_flags.set(4);
         ads_header.data_length.set(data_len as u32);
-        println!("not: {:?}", ads_header);
+        println!("not: {ads_header:?}");
 
         socket.write_all(ads_header.as_bytes()).unwrap();
         socket.write_all(notif_header.as_bytes()).unwrap();
