@@ -60,7 +60,7 @@ pub use client::{AdsState, Client, Device, Source, Timeouts};
 pub use errors::{Error, Result};
 pub use file::File;
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
-pub use symbol::Handle;
+pub use symbol::{Attribute, EnumInfo, Handle, RpcMethod, RpcMethodParameter};
 
 /// The default port for TCP communication.
 pub const PORT: u16 = 0xBF02;

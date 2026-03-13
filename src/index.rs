@@ -46,6 +46,7 @@ pub const SYM_DOWNLOAD2: u32 = 0xF00D;
 pub const SYM_DT_UPLOAD: u32 = 0xF00E;
 pub const SYM_UPLOAD_INFO2: u32 = 0xF00F;
 pub const SYM_NOTE: u32 = 0xF010;
+pub const GET_TYPEINFO_BYNAME_EX: u32 = 0xF011;
 
 /// Read/write process image of physical inputs (%I fields).
 pub const IO_RW_I: u32 = 0xF020;
