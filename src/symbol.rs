@@ -261,7 +261,7 @@ pub struct RpcMethodParameter {
     pub attributes: Vec<Attribute>,
 }
 
-// Type flag constants for trailing sections.
+// Type flag constants.
 const TYPE_FLAG_GUID: u32 = 0x080;
 const TYPE_FLAG_COPY_MASK: u32 = 0x200;
 const TYPE_FLAG_METHOD_INFOS: u32 = 0x800;
@@ -272,13 +272,6 @@ const TYPE_FLAG_ENUM_INFOS: u32 = 0x2000;
 const RPC_METHOD_ATTRIBUTE_FLAG: u32 = 0x08;
 const RPC_PARAM_ATTRIBUTE_FLAG: u32 = 0x40;
 
-/// Parsed trailing sections from a type entry.
-struct TrailingSections {
-    guid: Option<String>,
-    methods: Option<Vec<RpcMethod>>,
-    attributes: Option<Vec<Attribute>>,
-    enum_info: Option<Vec<EnumInfo>>,
-}
 
 fn parse_guid(ptr: &mut &[u8]) -> Result<String> {
     let ctx = "parsing GUID";
@@ -452,34 +445,49 @@ fn parse_rpc_method_parameter(mut ptr: &[u8]) -> Result<RpcMethodParameter> {
     Ok(RpcMethodParameter { name, typ, size, flags, comment, attributes })
 }
 
-fn parse_trailing_sections(
-    ptr: &mut &[u8], flags: u32, size: usize, base_type: u32,
-) -> Result<TrailingSections> {
-    let guid = if flags & TYPE_FLAG_GUID != 0 { Some(parse_guid(ptr)?) } else { None };
+fn parse_type_flags(
+    ptr: &mut &[u8], typ: &mut Type,
+) -> Result<()> {
+    if typ.flags & TYPE_FLAG_GUID != 0 {
+        typ.guid = Some(parse_guid(ptr)?);
+    }
 
+    if typ.flags & TYPE_FLAG_COPY_MASK != 0 {
+        skip_copy_mask(ptr, typ.size)?;
+    }
+
+    if typ.flags & TYPE_FLAG_METHOD_INFOS != 0 {
+        typ.methods = Some(parse_method_infos(ptr)?);
+    }
+
+    if typ.flags & TYPE_FLAG_ATTRIBUTES != 0 {
+        typ.attributes = Some(parse_attributes(ptr)?);
+    }
+
+    if typ.flags & TYPE_FLAG_ENUM_INFOS != 0 {
+        typ.enum_info = Some(parse_enum_infos(ptr, typ.size, typ.base_type)?);
+    }
+
+    Ok(())
+}
+
+fn parse_field_attributes(
+    ptr: &mut &[u8], flags: u32, size: usize,
+) -> Result<Option<Vec<Attribute>>> {
+    if flags & TYPE_FLAG_GUID != 0 {
+        parse_guid(ptr)?;
+    }
     if flags & TYPE_FLAG_COPY_MASK != 0 {
         skip_copy_mask(ptr, size)?;
     }
-
-    let methods = if flags & TYPE_FLAG_METHOD_INFOS != 0 {
-        Some(parse_method_infos(ptr)?)
+    if flags & TYPE_FLAG_METHOD_INFOS != 0 {
+        parse_method_infos(ptr)?;
+    }
+    if flags & TYPE_FLAG_ATTRIBUTES != 0 {
+        Ok(Some(parse_attributes(ptr)?))
     } else {
-        None
-    };
-
-    let attributes = if flags & TYPE_FLAG_ATTRIBUTES != 0 {
-        Some(parse_attributes(ptr)?)
-    } else {
-        None
-    };
-
-    let enum_info = if flags & TYPE_FLAG_ENUM_INFOS != 0 {
-        Some(parse_enum_infos(ptr, size, base_type)?)
-    } else {
-        None
-    };
-
-    Ok(TrailingSections { guid, methods, attributes, enum_info })
+        Ok(None)
+    }
 }
 
 /// A mapping from type name to type.
@@ -552,7 +560,7 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
 
         if let Some(parent) = parent {
             assert_eq!(sub_items, 0);
-            let trailing = parse_trailing_sections(&mut ptr, flags, size, base_type)?;
+            let attributes = parse_field_attributes(&mut ptr, flags, size)?;
             // Offset -1 marks that the field is placed somewhere else in memory
             // (e.g. AT %Mxx).
             let offset = if offset == 0xFFFF_FFFF { None } else { Some(offset) };
@@ -565,7 +573,7 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
                 base_type,
                 flags,
                 comment,
-                attributes: trailing.attributes,
+                attributes,
             });
             Ok(None)
         } else {
@@ -592,11 +600,7 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
                 ptr = rest;
             }
 
-            let trailing = parse_trailing_sections(&mut ptr, flags, size, base_type)?;
-            typinfo.guid = trailing.guid;
-            typinfo.methods = trailing.methods;
-            typinfo.attributes = trailing.attributes;
-            typinfo.enum_info = trailing.enum_info;
+            parse_type_flags(&mut ptr, &mut typinfo)?;
 
             Ok(Some(typinfo))
         }
@@ -647,8 +651,8 @@ pub fn decode_symbol_info(symbol_data: Vec<u8>, type_data: Vec<u8>) -> Result<(V
 
 /// Query a single type by name using `GET_TYPEINFO_BYNAME_EX` (0xF011).
 ///
-/// Returns a fully parsed [`Type`] including trailing sections (GUID,
-/// attributes, enum infos, RPC methods).
+/// Returns a fully parsed [`Type`] including GUID, attributes, enum infos,
+/// and RPC methods when present.
 pub fn get_type_info_by_name(device: Device<'_>, type_name: &str) -> Result<Type> {
     let mut read_data = vec![0u8; 4096];
     let n = device.write_read(index::GET_TYPEINFO_BYNAME_EX, 0, type_name.as_bytes(), &mut read_data)?;
@@ -700,7 +704,7 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
         }
 
         if let Some(parent) = parent {
-            let trailing = parse_trailing_sections(&mut ptr, flags, size, base_type)?;
+            let attributes = parse_field_attributes(&mut ptr, flags, size)?;
             let offset = if offset == 0xFFFF_FFFF { None } else { Some(offset) };
             parent.fields.push(Field {
                 name,
@@ -711,7 +715,7 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
                 base_type,
                 flags,
                 comment,
-                attributes: trailing.attributes,
+                attributes,
             });
             Ok(None)
         } else {
@@ -740,11 +744,7 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
                 ptr = rest;
             }
 
-            let trailing = parse_trailing_sections(&mut ptr, flags, size, base_type)?;
-            typinfo.guid = trailing.guid;
-            typinfo.methods = trailing.methods;
-            typinfo.attributes = trailing.attributes;
-            typinfo.enum_info = trailing.enum_info;
+            parse_type_flags(&mut ptr, &mut typinfo)?;
 
             Ok(Some(typinfo))
         }
