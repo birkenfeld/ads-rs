@@ -272,7 +272,6 @@ const TYPE_FLAG_ENUM_INFOS: u32 = 0x2000;
 const RPC_METHOD_ATTRIBUTE_FLAG: u32 = 0x08;
 const RPC_PARAM_ATTRIBUTE_FLAG: u32 = 0x40;
 
-
 fn parse_guid(ptr: &mut &[u8]) -> Result<String> {
     let ctx = "parsing GUID";
     let mut g = [0u8; 16];
@@ -445,9 +444,7 @@ fn parse_rpc_method_parameter(mut ptr: &[u8]) -> Result<RpcMethodParameter> {
     Ok(RpcMethodParameter { name, typ, size, flags, comment, attributes })
 }
 
-fn parse_type_flags(
-    ptr: &mut &[u8], typ: &mut Type,
-) -> Result<()> {
+fn parse_type_flags(ptr: &mut &[u8], typ: &mut Type) -> Result<()> {
     if typ.flags & TYPE_FLAG_GUID != 0 {
         typ.guid = Some(parse_guid(ptr)?);
     }
@@ -471,9 +468,7 @@ fn parse_type_flags(
     Ok(())
 }
 
-fn parse_field_attributes(
-    ptr: &mut &[u8], flags: u32, size: usize,
-) -> Result<Option<Vec<Attribute>>> {
+fn parse_field_attributes(ptr: &mut &[u8], flags: u32, size: usize) -> Result<Option<Vec<Attribute>>> {
     if flags & TYPE_FLAG_GUID != 0 {
         parse_guid(ptr)?;
     }
@@ -494,16 +489,25 @@ fn parse_field_attributes(
 pub type TypeMap = HashMap<String, Type>;
 
 /// Get and decode symbol and type information from the PLC.
-pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
+///
+/// If `with_type_info` is false, the type map download and parsing is skipped,
+/// returning an empty [`TypeMap`]. This is useful when only symbol names and
+/// offsets are needed, avoiding the overhead of the full type inventory.
+pub fn get_symbol_info(device: Device<'_>, with_extended_type_info: bool) -> Result<(Vec<Symbol>, TypeMap)> {
     // Query the sizes of symbol and type info.
     let mut read_data = [0; 64];
     device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
-    let types_len = LE::read_u32(&read_data[12..]) as usize;
 
-    // Query the type info.
-    let mut type_data = vec![0; types_len];
-    device.read_exact(index::SYM_DT_UPLOAD, 0, &mut type_data)?;
+    // Query the type info (if requested).
+    let type_data = if with_extended_type_info {
+        let types_len = LE::read_u32(&read_data[12..]) as usize;
+        let mut type_data = vec![0; types_len];
+        device.read_exact(index::SYM_DT_UPLOAD, 0, &mut type_data)?;
+        type_data
+    } else {
+        Vec::new()
+    };
 
     // Query the symbol info.
     let mut symbol_data = vec![0; symbol_len];

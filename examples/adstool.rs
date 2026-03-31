@@ -642,7 +642,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
             match subargs {
                 VarAction::List { filter } => {
-                    let (symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
+                    let (symbols, type_map) = ads::symbol::get_symbol_info(dev, true)?;
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
@@ -655,7 +655,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     }
                 }
                 VarAction::ListTypes { filter } => {
-                    let (_symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
+                    let (_symbols, type_map) = ads::symbol::get_symbol_info(dev, true)?;
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for (name, ty) in &type_map {
                         if name.to_lowercase().contains(&filter) {
