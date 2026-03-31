@@ -493,23 +493,35 @@ pub type TypeMap = HashMap<String, Type>;
 /// If `with_type_info` is false, the type map download and parsing is skipped,
 /// returning an empty [`TypeMap`]. This is useful when only symbol names and
 /// offsets are needed, avoiding the overhead of the full type inventory.
-pub fn get_symbol_info(device: Device<'_>, with_extended_type_info: bool) -> Result<(Vec<Symbol>, TypeMap)> {
-    // Query the sizes of symbol and type info.
+/// Get and decode symbol information from the PLC.
+///
+/// Returns only the symbol list without type information. Use
+/// [`get_symbol_and_type_info`] if the full type inventory is also needed.
+pub fn get_symbol_info(device: Device<'_>) -> Result<Vec<Symbol>> {
     let mut read_data = [0; 64];
     device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
 
-    // Query the type info (if requested).
-    let type_data = if with_extended_type_info {
-        let types_len = LE::read_u32(&read_data[12..]) as usize;
-        let mut type_data = vec![0; types_len];
-        device.read_exact(index::SYM_DT_UPLOAD, 0, &mut type_data)?;
-        type_data
-    } else {
-        Vec::new()
-    };
+    let mut symbol_data = vec![0; symbol_len];
+    device.read_exact(index::SYM_UPLOAD, 0, &mut symbol_data)?;
 
-    // Query the symbol info.
+    let (symbols, _) = decode_symbol_info(symbol_data, Vec::new())?;
+    Ok(symbols)
+}
+
+/// Get and decode symbol and type information from the PLC.
+///
+/// Returns the symbol list and a [`TypeMap`] containing the full type
+/// inventory including fields, attributes, enum variants, and RPC methods.
+pub fn get_symbol_and_extended_type_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
+    let mut read_data = [0; 64];
+    device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
+    let symbol_len = LE::read_u32(&read_data[4..]) as usize;
+    let types_len = LE::read_u32(&read_data[12..]) as usize;
+
+    let mut type_data = vec![0; types_len];
+    device.read_exact(index::SYM_DT_UPLOAD, 0, &mut type_data)?;
+
     let mut symbol_data = vec![0; symbol_len];
     device.read_exact(index::SYM_UPLOAD, 0, &mut symbol_data)?;
 

@@ -642,7 +642,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
 
             match subargs {
                 VarAction::List { filter } => {
-                    let (symbols, type_map) = ads::symbol::get_symbol_info(dev, true)?;
+                    let (symbols, type_map) = ads::symbol::get_symbol_and_extended_type_info(dev)?;
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
@@ -655,7 +655,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                     }
                 }
                 VarAction::ListTypes { filter } => {
-                    let (_symbols, type_map) = ads::symbol::get_symbol_info(dev, true)?;
+                    let (_symbols, type_map) = ads::symbol::get_symbol_and_extended_type_info(dev)?;
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for (name, ty) in &type_map {
                         if name.to_lowercase().contains(&filter) {
@@ -667,9 +667,8 @@ fn main_inner(args: Args) -> Result<(), Error> {
                                 println!("            Comment: {}", ty.comment);
                             }
                             if !ty.array.is_empty() {
-                                let dims: Vec<_> = ty.array.iter()
-                                    .map(|(lo, hi)| format!("[{lo}..{hi}]"))
-                                    .collect();
+                                let dims: Vec<_> =
+                                    ty.array.iter().map(|(lo, hi)| format!("[{lo}..{hi}]")).collect();
                                 println!("            Array: {}", dims.join(""));
                             }
                             if let Some(attrs) = &ty.attributes {
@@ -684,7 +683,9 @@ fn main_inner(args: Args) -> Result<(), Error> {
                             }
                             if let Some(methods) = &ty.methods {
                                 for m in methods {
-                                    let params: Vec<_> = m.parameters.iter()
+                                    let params: Vec<_> = m
+                                        .parameters
+                                        .iter()
                                         .map(|p| {
                                             let dir = match p.flags & 0x03 {
                                                 0x01 => "in",
