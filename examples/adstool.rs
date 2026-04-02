@@ -620,8 +620,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let dev = client.device(amsaddr);
 
             fn print_fields(
-                type_map: &ads::symbol::TypeMap, base_offset: u32, typ: &str,
-                level: usize, extended: bool,
+                type_map: &ads::symbol::TypeMap, base_offset: u32, typ: &str, level: usize, extended: bool,
             ) {
                 if !type_map.contains_key(typ) {
                     return;
@@ -641,8 +640,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                         if extended {
                             if let Some(attrs) = &field.attributes {
                                 for a in attrs {
-                                    let attr_indent =
-                                        (0..2 * (level + 1)).map(|_| ' ').collect::<String>();
+                                    let attr_indent = (0..2 * (level + 1)).map(|_| ' ').collect::<String>();
                                     println!("            {attr_indent}@{} = {}", a.name, a.value);
                                 }
                             }
