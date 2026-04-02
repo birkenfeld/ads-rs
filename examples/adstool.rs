@@ -702,12 +702,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                                 } else {
                                     format!(" -> {}", m.return_type)
                                 };
-                                println!(
-                                    "            Method: {}({}){}",
-                                    m.name,
-                                    params.join(", "),
-                                    ret
-                                );
+                                println!("            Method: {}({}){}", m.name, params.join(", "), ret);
                                 if !m.comment.is_empty() {
                                     println!("              Comment: {}", m.comment);
                                 }
