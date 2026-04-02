@@ -1,13 +1,23 @@
 use crate::symbol::decode_symbol_info;
 
+// Struct used to avoid clippy::too_many_arguments on build_type_entry.
+struct TypeEntryBuilder<'a> {
+    name: &'a str,
+    type_name: &'a str,
+    comment: &'a str,
+    size: u32,
+    offset: u32,
+    base_type: u32,
+    flags: u32,
+    array_dims: &'a [(i32, i32)],
+    sub_items: &'a [Vec<u8>],
+}
+
 /// Build a type entry byte blob matching the Beckhoff SYM_DT_UPLOAD wire format.
 ///
 /// The binary layout is fixed by Beckhoff and will not change, so this test
 /// ensures our parsing stays in sync with the on-wire structure.
-fn build_type_entry(
-    name: &str, type_name: &str, comment: &str, size: u32, offset: u32, base_type: u32, flags: u32,
-    array_dims: &[(i32, i32)], sub_items: &[Vec<u8>],
-) -> Vec<u8> {
+fn build_type_entry(entry: &TypeEntryBuilder) -> Vec<u8> {
     let mut body = Vec::new();
 
     // Header (version 1)
@@ -15,33 +25,33 @@ fn build_type_entry(
     body.extend_from_slice(&0u16.to_le_bytes()); // subitem_index
     body.extend_from_slice(&0u16.to_le_bytes()); // plc_interface_id
     body.extend_from_slice(&0u32.to_le_bytes()); // reserved
-    body.extend_from_slice(&size.to_le_bytes());
-    body.extend_from_slice(&offset.to_le_bytes());
-    body.extend_from_slice(&base_type.to_le_bytes());
-    body.extend_from_slice(&flags.to_le_bytes());
-    body.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    body.extend_from_slice(&(type_name.len() as u16).to_le_bytes());
-    body.extend_from_slice(&(comment.len() as u16).to_le_bytes());
-    body.extend_from_slice(&(array_dims.len() as u16).to_le_bytes());
-    body.extend_from_slice(&(sub_items.len() as u16).to_le_bytes());
+    body.extend_from_slice(&entry.size.to_le_bytes());
+    body.extend_from_slice(&entry.offset.to_le_bytes());
+    body.extend_from_slice(&entry.base_type.to_le_bytes());
+    body.extend_from_slice(&entry.flags.to_le_bytes());
+    body.extend_from_slice(&(entry.name.len() as u16).to_le_bytes());
+    body.extend_from_slice(&(entry.type_name.len() as u16).to_le_bytes());
+    body.extend_from_slice(&(entry.comment.len() as u16).to_le_bytes());
+    body.extend_from_slice(&(entry.array_dims.len() as u16).to_le_bytes());
+    body.extend_from_slice(&(entry.sub_items.len() as u16).to_le_bytes());
 
     // Strings (null-terminated)
-    body.extend_from_slice(name.as_bytes());
+    body.extend_from_slice(entry.name.as_bytes());
     body.push(0);
-    body.extend_from_slice(type_name.as_bytes());
+    body.extend_from_slice(entry.type_name.as_bytes());
     body.push(0);
-    body.extend_from_slice(comment.as_bytes());
+    body.extend_from_slice(entry.comment.as_bytes());
     body.push(0);
 
     // Array dimensions: each is (lower_bound, element_count)
-    for &(lower, upper) in array_dims {
+    for &(lower, upper) in entry.array_dims {
         body.extend_from_slice(&lower.to_le_bytes());
         // on wire this is the total element count, not upper bound
         body.extend_from_slice(&(upper - lower + 1).to_le_bytes());
     }
 
     // Sub-items (already framed with their own entry_size)
-    for sub in sub_items {
+    for sub in entry.sub_items {
         body.extend_from_slice(sub);
     }
 
@@ -64,20 +74,40 @@ fn decode_struct_type_from_bytes() {
     //   nValue: INT    (offset 2, size 2, base_type 2)
     // Total struct size: 4 (padding byte between BOOL and INT)
 
-    let field_bflag = build_type_entry("bFlag", "BOOL", "", 1, 0, 33, 0x01, &[], &[]);
-    let field_nvalue = build_type_entry("nValue", "INT", "", 2, 2, 2, 0x01, &[], &[]);
+    let field_bflag = build_type_entry(&TypeEntryBuilder {
+        name: "bFlag",
+        type_name: "BOOL",
+        comment: "",
+        size: 1,
+        offset: 0,
+        base_type: 33,
+        flags: 0x01,
+        array_dims: &[],
+        sub_items: &[],
+    });
+    let field_nvalue = build_type_entry(&TypeEntryBuilder {
+        name: "nValue",
+        type_name: "INT",
+        comment: "",
+        size: 2,
+        offset: 2,
+        base_type: 2,
+        flags: 0x01,
+        array_dims: &[],
+        sub_items: &[],
+    });
 
-    let struct_entry = build_type_entry(
-        "ST_Test",
-        "",
-        "",
-        4,    // total size
-        0,    // offset (0 for top-level)
-        65,   // compound type
-        0x01, // data type flag
-        &[],
-        &[field_bflag, field_nvalue],
-    );
+    let struct_entry = build_type_entry(&TypeEntryBuilder {
+        name: "ST_Test",
+        type_name: "",
+        comment: "",
+        size: 4,
+        offset: 0,
+        base_type: 65, // compound type
+        flags: 0x01,   // data type flag
+        array_dims: &[],
+        sub_items: &[field_bflag, field_nvalue],
+    });
 
     let (symbols, type_map) = decode_symbol_info(Vec::new(), struct_entry).unwrap();
     assert!(symbols.is_empty());
