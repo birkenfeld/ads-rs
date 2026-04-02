@@ -613,9 +613,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let (client, amsaddr) = connect(args.target, args.autoroute, ads::ports::TC3_PLC_SYSTEM1)?;
             let dev = client.device(amsaddr);
 
-            fn print_fields(
-                type_map: &ads::symbol::TypeMap, base_offset: u32, typ: &str, level: usize,
-            ) {
+            fn print_fields(type_map: &ads::symbol::TypeMap, base_offset: u32, typ: &str, level: usize) {
                 if !type_map.contains_key(typ) {
                     return;
                 }
@@ -631,13 +629,19 @@ fn main_inner(args: Args) -> Result<(), Error> {
                             field.typ,
                             39 - 2 * level
                         );
+                        if let Some(attrs) = &field.attributes {
+                            for a in attrs {
+                                let attr_indent = (0..2 * (level + 1)).map(|_| ' ').collect::<String>();
+                                println!("            {attr_indent}@{} = {}", a.name, a.value);
+                            }
+                        }
                         print_fields(type_map, base_offset + offset, &field.typ, level + 1);
                     }
                 }
             }
 
             fn list_variables(dev: ads::Device<'_>, filter: Option<String>) -> ads::Result<()> {
-                let (symbols, type_map) = ads::symbol::get_symbol_type_info(dev)?;
+                let (symbols, type_map) = ads::symbol::get_symbol_info(dev)?;
                 let filter = filter.unwrap_or_default().to_lowercase();
                 for sym in symbols {
                     if sym.name.to_lowercase().contains(&filter) {
@@ -652,11 +656,66 @@ fn main_inner(args: Args) -> Result<(), Error> {
             }
 
             fn list_types(dev: ads::Device<'_>, filter: Option<String>) -> ads::Result<()> {
-                let (_, type_map) = ads::symbol::get_symbol_type_info(dev)?;
+                let (_, type_map) = ads::symbol::get_symbol_info(dev)?;
                 let filter = filter.unwrap_or_default().to_lowercase();
                 for (name, ty) in &type_map {
                     if name.to_lowercase().contains(&filter) {
                         println!("**          ({:6x}) {:40}", ty.size, name);
+                        if let Some(guid) = &ty.guid {
+                            println!("            GUID: {guid}");
+                        }
+                        if !ty.comment.is_empty() {
+                            println!("            Comment: {}", ty.comment);
+                        }
+                        if !ty.array.is_empty() {
+                            let dims: Vec<_> =
+                                ty.array.iter().map(|(lo, hi)| format!("[{lo}..{hi}]")).collect();
+                            println!("            Array: {}", dims.join(""));
+                        }
+                        if let Some(attrs) = &ty.attributes {
+                            for a in attrs {
+                                println!("            @{} = {}", a.name, a.value);
+                            }
+                        }
+                        if let Some(enums) = &ty.enum_info {
+                            for e in enums {
+                                println!("            Enum: {} = {}", e.name, e.value);
+                            }
+                        }
+                        if let Some(methods) = &ty.methods {
+                            for m in methods {
+                                let params: Vec<_> = m
+                                    .parameters
+                                    .iter()
+                                    .map(|p| {
+                                        let dir = match p.flags & 0x03 {
+                                            0x01 => "in",
+                                            0x02 => "out",
+                                            0x03 => "inout",
+                                            _ => "?",
+                                        };
+                                        format!("{}: {} [{}]", p.name, p.typ, dir)
+                                    })
+                                    .collect();
+                                let ret = if m.return_type.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" -> {}", m.return_type)
+                                };
+                                println!(
+                                    "            Method: {}({}){}",
+                                    m.name,
+                                    params.join(", "),
+                                    ret
+                                );
+                                if !m.comment.is_empty() {
+                                    println!("              Comment: {}", m.comment);
+                                }
+                                for a in &m.attributes {
+                                    println!("              @{} = {}", a.name, a.value);
+                                }
+                            }
+                        }
                         print_fields(&type_map, 0, name, 1);
                     }
                 }

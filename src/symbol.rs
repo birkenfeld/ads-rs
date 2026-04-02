@@ -487,33 +487,11 @@ fn parse_field_attributes(ptr: &mut &[u8], flags: u32, size: usize) -> Result<Op
 
 /// A mapping from type name to type.
 pub type TypeMap = HashMap<String, Type>;
-
-/// Get and decode symbol and type information from the PLC.
-///
-/// If `with_type_info` is false, the type map download and parsing is skipped,
-/// returning an empty [`TypeMap`]. This is useful when only symbol names and
-/// offsets are needed, avoiding the overhead of the full type inventory.
-/// Get and decode symbol information from the PLC.
-///
-/// Returns only the symbol list without type information. Use
-/// [`get_symbol_and_type_info`] if the full type inventory is also needed.
-pub fn get_symbol_info(device: Device<'_>) -> Result<Vec<Symbol>> {
-    let mut read_data = [0; 64];
-    device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
-    let symbol_len = LE::read_u32(&read_data[4..]) as usize;
-
-    let mut symbol_data = vec![0; symbol_len];
-    device.read_exact(index::SYM_UPLOAD, 0, &mut symbol_data)?;
-
-    let (symbols, _) = decode_symbol_info(symbol_data, Vec::new())?;
-    Ok(symbols)
-}
-
 /// Get and decode symbol and type information from the PLC.
 ///
 /// Returns the symbol list and a [`TypeMap`] containing the full type
 /// inventory including fields, attributes, enum variants, and RPC methods.
-pub fn get_symbol_type_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
+pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
     let mut read_data = [0; 64];
     device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
