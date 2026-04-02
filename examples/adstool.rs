@@ -650,9 +650,11 @@ fn main_inner(args: Args) -> Result<(), Error> {
                 }
             }
 
-            match subargs {
-                VarAction::List { filter, extended } => {
-                    let (symbols, type_map) = ads::symbol::get_symbol_and_extended_type_info(dev)?;
+            fn list_variables(
+                dev: ads::Device<'_>, filter: Option<String>, extended: bool,
+            ) -> ads::Result<()> {
+                if extended {
+                    let (symbols, type_map) = ads::symbol::get_symbol_type_info(dev)?;
                     let filter = filter.unwrap_or_default().to_lowercase();
                     for sym in symbols {
                         if sym.name.to_lowercase().contains(&filter) {
@@ -660,76 +662,95 @@ fn main_inner(args: Args) -> Result<(), Error> {
                                 "{:4x}:{:6x} ({:6x}) {:40} {}",
                                 sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ
                             );
-                            print_fields(&type_map, sym.ix_offset, &sym.typ, 1, extended);
+                            print_fields(&type_map, sym.ix_offset, &sym.typ, 1, true);
+                        }
+                    }
+                } else {
+                    let symbols = ads::symbol::get_symbol_info(dev)?;
+                    let filter = filter.unwrap_or_default().to_lowercase();
+                    for sym in symbols {
+                        if sym.name.to_lowercase().contains(&filter) {
+                            println!(
+                                "{:4x}:{:6x} ({:6x}) {:40} {}",
+                                sym.ix_group, sym.ix_offset, sym.size, sym.name, sym.typ
+                            );
                         }
                     }
                 }
-                VarAction::ListTypes { filter, extended } => {
-                    let (_symbols, type_map) = ads::symbol::get_symbol_and_extended_type_info(dev)?;
-                    let filter = filter.unwrap_or_default().to_lowercase();
-                    for (name, ty) in &type_map {
-                        if name.to_lowercase().contains(&filter) {
-                            println!("**          ({:6x}) {:40}", ty.size, name);
-                            if extended {
-                                if let Some(guid) = &ty.guid {
-                                    println!("            GUID: {guid}");
+                Ok(())
+            }
+
+            fn list_types(dev: ads::Device<'_>, filter: Option<String>, extended: bool) -> ads::Result<()> {
+                let (_, type_map) = ads::symbol::get_symbol_type_info(dev)?;
+
+                let filter = filter.unwrap_or_default().to_lowercase();
+                for (name, ty) in &type_map {
+                    if name.to_lowercase().contains(&filter) {
+                        println!("**          ({:6x}) {:40}", ty.size, name);
+                        if extended {
+                            if let Some(guid) = &ty.guid {
+                                println!("            GUID: {guid}");
+                            }
+                            if !ty.comment.is_empty() {
+                                println!("            Comment: {}", ty.comment);
+                            }
+                            if !ty.array.is_empty() {
+                                let dims: Vec<_> =
+                                    ty.array.iter().map(|(lo, hi)| format!("[{lo}..{hi}]")).collect();
+                                println!("            Array: {}", dims.join(""));
+                            }
+                            if let Some(attrs) = &ty.attributes {
+                                for a in attrs {
+                                    println!("            @{} = {}", a.name, a.value);
                                 }
-                                if !ty.comment.is_empty() {
-                                    println!("            Comment: {}", ty.comment);
+                            }
+                            if let Some(enums) = &ty.enum_info {
+                                for e in enums {
+                                    println!("            Enum: {} = {}", e.name, e.value);
                                 }
-                                if !ty.array.is_empty() {
-                                    let dims: Vec<_> =
-                                        ty.array.iter().map(|(lo, hi)| format!("[{lo}..{hi}]")).collect();
-                                    println!("            Array: {}", dims.join(""));
-                                }
-                                if let Some(attrs) = &ty.attributes {
-                                    for a in attrs {
-                                        println!("            @{} = {}", a.name, a.value);
+                            }
+                            if let Some(methods) = &ty.methods {
+                                for m in methods {
+                                    let params: Vec<_> = m
+                                        .parameters
+                                        .iter()
+                                        .map(|p| {
+                                            let dir = match p.flags & 0x03 {
+                                                0x01 => "in",
+                                                0x02 => "out",
+                                                0x03 => "inout",
+                                                _ => "?",
+                                            };
+                                            format!("{}: {} [{}]", p.name, p.typ, dir)
+                                        })
+                                        .collect();
+                                    let ret = if m.return_type.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!(" -> {}", m.return_type)
+                                    };
+                                    println!("            Method: {}({}){}", m.name, params.join(", "), ret);
+                                    if !m.comment.is_empty() {
+                                        println!("              Comment: {}", m.comment);
                                     }
-                                }
-                                if let Some(enums) = &ty.enum_info {
-                                    for e in enums {
-                                        println!("            Enum: {} = {}", e.name, e.value);
-                                    }
-                                }
-                                if let Some(methods) = &ty.methods {
-                                    for m in methods {
-                                        let params: Vec<_> = m
-                                            .parameters
-                                            .iter()
-                                            .map(|p| {
-                                                let dir = match p.flags & 0x03 {
-                                                    0x01 => "in",
-                                                    0x02 => "out",
-                                                    0x03 => "inout",
-                                                    _ => "?",
-                                                };
-                                                format!("{}: {} [{}]", p.name, p.typ, dir)
-                                            })
-                                            .collect();
-                                        let ret = if m.return_type.is_empty() {
-                                            String::new()
-                                        } else {
-                                            format!(" -> {}", m.return_type)
-                                        };
-                                        println!(
-                                            "            Method: {}({}){}",
-                                            m.name,
-                                            params.join(", "),
-                                            ret
-                                        );
-                                        if !m.comment.is_empty() {
-                                            println!("              Comment: {}", m.comment);
-                                        }
-                                        for a in &m.attributes {
-                                            println!("              @{} = {}", a.name, a.value);
-                                        }
+                                    for a in &m.attributes {
+                                        println!("              @{} = {}", a.name, a.value);
                                     }
                                 }
                             }
-                            print_fields(&type_map, 0, name, 1, extended);
                         }
+                        print_fields(&type_map, 0, name, 1, extended);
                     }
+                }
+                Ok(())
+            }
+
+            match subargs {
+                VarAction::List { filter, extended } => {
+                    list_variables(dev, filter, extended)?;
+                }
+                VarAction::ListTypes { filter, extended } => {
+                    list_types(dev, filter, extended)?;
                 }
                 VarAction::Read { name, r#type, length, hex } => {
                     let handle = ads::symbol::Handle::new(dev, &name)?;

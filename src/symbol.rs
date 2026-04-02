@@ -513,7 +513,7 @@ pub fn get_symbol_info(device: Device<'_>) -> Result<Vec<Symbol>> {
 ///
 /// Returns the symbol list and a [`TypeMap`] containing the full type
 /// inventory including fields, attributes, enum variants, and RPC methods.
-pub fn get_symbol_and_extended_type_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
+pub fn get_symbol_type_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
     let mut read_data = [0; 64];
     device.read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)?;
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
