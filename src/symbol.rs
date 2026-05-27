@@ -253,12 +253,46 @@ pub struct RpcMethodParameter {
     pub typ: String,
     /// Size in bytes.
     pub size: usize,
-    /// Parameter flags (e.g. 0x01 = input, 0x02 = output).
-    pub flags: u32,
+    /// PLC variable declaration kind of the parameter.
+    pub variable_kind: RpcMethodParameterVariableKind,
     /// Comment attached to the parameter.
     pub comment: String,
     /// Attributes on the parameter.
     pub attributes: Vec<Attribute>,
+}
+
+/// PLC variable declaration kind of an RPC method parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcMethodParameterVariableKind {
+    /// VAR_INPUT parameter.
+    Input,
+    /// VAR_OUTPUT parameter.
+    Output,
+    /// VAR_IN_OUT parameter.
+    InOut,
+    /// Unknown or unspecified parameter variable kind.
+    Unknown,
+}
+
+impl RpcMethodParameterVariableKind {
+    fn from_flags(flags: u32) -> Self {
+        match flags & 0x03 {
+            0x01 => Self::Input,
+            0x02 => Self::Output,
+            0x03 => Self::InOut,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Return the Structured Text declaration keyword for this parameter kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "VAR_INPUT",
+            Self::Output => "VAR_OUTPUT",
+            Self::InOut => "VAR_IN_OUT",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 // Type flag constants.
@@ -441,7 +475,9 @@ fn parse_rpc_method_parameter(mut ptr: &[u8]) -> Result<RpcMethodParameter> {
         attributes = parse_attributes(&mut ptr)?;
     }
 
-    Ok(RpcMethodParameter { name, typ, size, flags, comment, attributes })
+    let variable_kind = RpcMethodParameterVariableKind::from_flags(flags);
+
+    Ok(RpcMethodParameter { name, typ, size, variable_kind, comment, attributes })
 }
 
 fn parse_type_flags(ptr: &mut &[u8], typ: &mut Type) -> Result<()> {

@@ -687,15 +687,7 @@ fn main_inner(args: Args) -> Result<(), Error> {
                                 let params: Vec<_> = m
                                     .parameters
                                     .iter()
-                                    .map(|p| {
-                                        let dir = match p.flags & 0x03 {
-                                            0x01 => "in",
-                                            0x02 => "out",
-                                            0x03 => "inout",
-                                            _ => "?",
-                                        };
-                                        format!("{}: {} [{}]", p.name, p.typ, dir)
-                                    })
+                                    .map(|p| format!("{}: {} [{}]", p.name, p.typ, p.variable_kind.as_str()))
                                     .collect();
                                 let ret = if m.return_type.is_empty() {
                                     String::new()
