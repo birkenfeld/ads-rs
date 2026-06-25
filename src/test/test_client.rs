@@ -254,6 +254,18 @@ fn test_multi_notification() {
         assert_eq!(*id_reqs[1].id(), "bad");
         assert!(id_reqs[1].handle().is_err());
 
+        // Consuming accessor yields the owned id paired with the handle result, ready
+        // to collect successful registrations into a map keyed by handle.
+        let registered: std::collections::HashMap<u32, &str> = Vec::from(id_reqs)
+            .into_iter()
+            .filter_map(|req| {
+                let (id, handle) = req.into_id_handle();
+                handle.ok().map(|h| (h, id))
+            })
+            .collect();
+        assert_eq!(registered.len(), 1);
+        assert!(registered.values().any(|&id| id == "ok"));
+
         let mut reqs = [DelNotifRequest::new(handle), DelNotifRequest::new(42)];
         device.delete_notification_multi(&mut reqs).unwrap();
         assert!(reqs[0].ensure().is_ok());

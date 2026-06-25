@@ -1450,6 +1450,16 @@ impl<Id> AddNotifRequest<Id> {
             Ok(self.res.length.get())
         }
     }
+
+    /// Consume the request, returning its identifier paired with the handle result.
+    ///
+    /// This hands back the owned `Id` (avoiding a clone of [`id`](Self::id)) alongside
+    /// the same result as [`handle`](Self::handle), which is convenient for collecting
+    /// successful registrations into a map keyed by handle.
+    pub fn into_id_handle(self) -> (Id, Result<notif::Handle>) {
+        let handle = self.handle();
+        (self.id, handle)
+    }
 }
 
 /// A single request for a [`Device::delete_notification_multi`] request.
