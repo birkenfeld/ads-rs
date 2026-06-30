@@ -242,6 +242,30 @@ fn test_multi_notification() {
         let handle = reqs[0].handle().unwrap();
         assert!(reqs[1].handle().is_err());
 
+        // The same call carrying caller-supplied ids: the id correlates back to its
+        // result without relying on slice position.
+        let mut id_reqs = [
+            AddNotifRequest::new(0x4020, 7, &attrib).with_id("ok"),
+            AddNotifRequest::new(0x6789, 0, &attrib).with_id("bad"),
+        ];
+        device.add_notification_multi(&mut id_reqs).unwrap();
+        assert_eq!(*id_reqs[0].id(), "ok");
+        assert!(id_reqs[0].handle().is_ok());
+        assert_eq!(*id_reqs[1].id(), "bad");
+        assert!(id_reqs[1].handle().is_err());
+
+        // Consuming accessor yields the owned id paired with the handle result, ready
+        // to collect successful registrations into a map keyed by handle.
+        let registered: std::collections::HashMap<u32, &str> = Vec::from(id_reqs)
+            .into_iter()
+            .filter_map(|req| {
+                let (id, handle) = req.into_id_handle();
+                handle.ok().map(|h| (h, id))
+            })
+            .collect();
+        assert_eq!(registered.len(), 1);
+        assert!(registered.values().any(|&id| id == "ok"));
+
         let mut reqs = [DelNotifRequest::new(handle), DelNotifRequest::new(42)];
         device.delete_notification_multi(&mut reqs).unwrap();
         assert!(reqs[0].ensure().is_ok());

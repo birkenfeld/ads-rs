@@ -1002,7 +1002,7 @@ impl Device<'_> {
     /// the request as a whole succeeds, each single read can have returned its
     /// own error.  The [`AddNotifRequest::handle`] method will return either
     /// the returned handle or the error for each read.
-    pub fn add_notification_multi(&self, requests: &mut [AddNotifRequest]) -> Result<()> {
+    pub fn add_notification_multi<Id>(&self, requests: &mut [AddNotifRequest<Id>]) -> Result<()> {
         let nreq = requests.len();
         let rlen = size_of::<ResultLength>() * nreq;
         let wlen = size_of::<AddNotif>() * nreq;
@@ -1394,12 +1394,18 @@ impl<'buf> WriteReadRequest<'buf> {
 }
 
 /// A single request for a [`Device::add_notification_multi`] request.
-pub struct AddNotifRequest {
+///
+/// An optional caller-supplied identifier can be attached with
+/// [`with_id`](AddNotifRequest::with_id) so the returned handle can be correlated
+/// back to its source without relying on the request's position in the slice.  The
+/// default `Id` of `()` means no identifier is attached.
+pub struct AddNotifRequest<Id = ()> {
     req: AddNotif,
     res: ResultLength, // length is the handle
+    id: Id,
 }
 
-impl AddNotifRequest {
+impl AddNotifRequest<()> {
     /// Create the request with given index group, index offset and notification
     /// attributes.
     pub fn new(index_group: u32, index_offset: u32, attributes: &notif::Attributes) -> Self {
@@ -1414,7 +1420,24 @@ impl AddNotifRequest {
                 reserved: [0; 16],
             },
             res: ResultLength::new_zeroed(),
+            id: (),
         }
+    }
+}
+
+impl<Id> AddNotifRequest<Id> {
+    /// Attach a caller-supplied identifier, returning a request that carries it.
+    ///
+    /// After [`Device::add_notification_multi`] the identifier can be read back with
+    /// [`id`](AddNotifRequest::id) and paired with [`handle`](AddNotifRequest::handle),
+    /// removing the need to correlate results by slice position.
+    pub fn with_id<NewId>(self, id: NewId) -> AddNotifRequest<NewId> {
+        AddNotifRequest { req: self.req, res: self.res, id }
+    }
+
+    /// The identifier attached to this request.
+    pub fn id(&self) -> &Id {
+        &self.id
     }
 
     /// Get the returned notification handle.
@@ -1426,6 +1449,16 @@ impl AddNotifRequest {
         } else {
             Ok(self.res.length.get())
         }
+    }
+
+    /// Consume the request, returning its identifier paired with the handle result.
+    ///
+    /// This hands back the owned `Id` (avoiding a clone of [`id`](Self::id)) alongside
+    /// the same result as [`handle`](Self::handle), which is convenient for collecting
+    /// successful registrations into a map keyed by handle.
+    pub fn into_id_handle(self) -> (Id, Result<notif::Handle>) {
+        let handle = self.handle();
+        (self.id, handle)
     }
 }
 
