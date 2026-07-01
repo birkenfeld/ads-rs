@@ -445,21 +445,22 @@ fn main_inner(args: Args) -> Result<(), Error> {
             let mut stack = Vec::new();
             loop {
                 match rdr.read_event() {
-                    Ok(Event::Start(el)) => {
-                        if el.name() != QName(b"TcTargetDesc") {
-                            stack.push(String::from_utf8_lossy(el.name().0).to_string());
-                        }
+                    Ok(Event::Start(el)) if el.name() != QName(b"TcTargetDesc") => {
+                        stack.push(String::from_utf8_lossy(el.name().0).to_string());
                     }
+
                     Ok(Event::End(_)) => {
                         let _ = stack.pop();
                     }
-                    Ok(Event::Text(t)) => {
-                        if !stack.is_empty() {
-                            println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(&t));
-                        }
+
+                    Ok(Event::Text(t)) if !stack.is_empty() => {
+                        println!("{}: {}", stack.iter().format("."), String::from_utf8_lossy(&t));
                     }
+
                     Ok(Event::Eof) => break,
+
                     Err(e) => return Err(Error::Str(format!("error parsing target desc XML: {e}"))),
+
                     _ => (),
                 }
             }

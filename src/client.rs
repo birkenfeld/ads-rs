@@ -149,6 +149,11 @@ impl Drop for Client {
             .get_mut()
             .expect("notification handle cache lock was poisoned");
 
+        // Close all open notification handles.
+        for (addr, handle) in std::mem::take(handles) {
+            let _ = self.device(addr).delete_notification(handle);
+        }
+
         if let Ok(ref mut socket) = self.socket.lock() {
             // Remove our port from the router, if necessary.
             if self.source_port_opened {
@@ -161,11 +166,6 @@ impl Drop for Client {
         }
 
         self.receiver.stop();
-
-        // Close all open notification handles.
-        for (addr, handle) in std::mem::take(handles) {
-            let _ = self.device(addr).delete_notification(handle);
-        }
     }
 }
 
@@ -212,17 +212,24 @@ impl Client {
             .to_socket_addrs()
             .ctx("converting address to SocketAddr")?
             .next()
-            .expect("at least one SocketAddr");
+            .ok_or(Error::Other("no destination address could be resolved"))?;
+
         let mut socket = if let Some(timeout) = timeouts.connect {
-            TcpStream::connect_timeout(&addr, timeout).ctx("connecting TCP socket with timeout")?
+            TcpStream::connect_timeout(&addr, timeout)
+                .ctx("establishing connetion to remote ADS router (with timeout)")?
         } else {
-            TcpStream::connect(addr).ctx("connecting TCP socket")?
+            TcpStream::connect(addr).ctx("establishing connection to remote ADS router")?
         };
 
         // Disable Nagle to ensure small requests are sent promptly; we're
         // playing ping-pong with request reply, so no pipelining.
-        socket.set_nodelay(true).ctx("setting NODELAY")?;
-        socket.set_write_timeout(timeouts.write).ctx("setting write timeout")?;
+        socket.set_nodelay(true).ctx("setting client socket NODELAY")?;
+        socket
+            .set_write_timeout(timeouts.write)
+            .ctx("setting client socket write timeout")?;
+        socket
+            .set_read_timeout(timeouts.read)
+            .ctx("setting client socket read timeout")?;
 
         // Determine our source AMS address.  If it's not specified, try to use
         // the socket's local IPv4 address, if it's IPv6 (not sure if Beckhoff
@@ -652,7 +659,7 @@ impl Drop for ClientReceiver {
 }
 
 /// A `Client` wrapper that talks to a specific ADS device.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Device<'c> {
     /// The underlying `Client`.
     pub client: &'c Client,

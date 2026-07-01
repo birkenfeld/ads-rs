@@ -14,6 +14,7 @@ use crate::{Device, Result};
 /// A handle to a variable within the ADS device.
 ///
 /// The handle is released automatically on drop.
+#[derive(Debug)]
 pub struct Handle<'c> {
     device: Device<'c>,
     handle: u32,

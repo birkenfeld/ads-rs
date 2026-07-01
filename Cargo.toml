@@ -1,13 +1,13 @@
 [package]
 name = "ads"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2018"
 authors = ["Georg Brandl <g.brandl@fz-juelich.de>"]
 license = "MIT/Apache-2.0"
 description = "Client for the Beckhoff Automation Device Specification protocol for PLCs"
 repository = "https://github.com/birkenfeld/ads-rs"
 keywords = ["Beckhoff", "ADS", "automation", "device", "PLC"]
-rust-version = "1.63"
+rust-version = "1.71"
 
 [dependencies]
 byteorder = "1.5.0"
