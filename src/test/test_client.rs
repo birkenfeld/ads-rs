@@ -297,7 +297,7 @@ fn test_string_type() {
         let ret = device.read_value::<String5>(0x4020, 7).unwrap();
         assert!(<[u8; 5]>::from(ret) == [b'a', b'b', b'c', 0, 0]);
         assert!(String::try_from(ret).unwrap() == "abc");
-        assert!(<Vec<u8>>::from(ret) == [b'a', b'b', b'c']);
+        assert!(<Vec<u8>>::from(ret) == *b"abc");
     })
 }
 
