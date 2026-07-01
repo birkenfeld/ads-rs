@@ -27,5 +27,5 @@ clap = { version = "3.2.25", features = ["derive"] }
 strum = { version = "0.26.3", features = ["derive"] }
 
 # MSRV
-textwrap = "=0.16.0"
+textwrap = { version = "=0.16.0", default-features = false }
 unicode-width = "=0.1.13"
