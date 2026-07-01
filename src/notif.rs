@@ -26,7 +26,7 @@ pub struct Attributes {
 
 impl Attributes {
     /// Return new notification attributes.
-    pub fn new(
+    pub const fn new(
         length: usize, trans_mode: TransmissionMode, max_delay: Duration, cycle_time: Duration,
     ) -> Self {
         Self { length, trans_mode, max_delay, cycle_time }

@@ -1,6 +1,5 @@
 //! Contains the AMS NetId and related types.
 
-use std::convert::TryInto;
 use std::fmt::{self, Display};
 use std::io::{Read, Write};
 use std::net::Ipv4Addr;
@@ -38,8 +37,13 @@ impl AmsNetId {
     }
 
     /// Create a NetID from a slice (which must have length 6).
-    pub fn from_slice(slice: &[u8]) -> Option<Self> {
-        Some(AmsNetId(slice.try_into().ok()?))
+    pub const fn from_slice(s: &[u8]) -> Option<Self> {
+        if s.len() == 6 {
+            let addr = [s[0], s[1], s[2], s[3], s[4], s[5]];
+            Some(AmsNetId(addr))
+        } else {
+            None
+        }
     }
 
     /// Create a NetID from an IPv4 address and two additional octets.
