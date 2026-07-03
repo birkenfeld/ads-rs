@@ -112,15 +112,53 @@ pub enum Source {
     Request,
 }
 
+/// Write half of the shared TCP stream.
+///
+/// AMS/TCP is length-prefix framed, so bytes from concurrent writers must
+/// never interleave on the stream — the router would lose frame sync and drop
+/// the connection permanently.  This type is the only handle to the socket's
+/// write side after construction: every write goes through
+/// [`FrameSink::send_frame`], which locks internally and writes one complete
+/// frame at a time.  (`&TcpStream` implements `Write`, so a bare shared
+/// socket would let unsynchronised writes compile; this wrapper makes that
+/// misuse unrepresentable.)
+#[derive(Debug)]
+struct FrameSink(Mutex<TcpStream>);
+
+impl FrameSink {
+    fn new(socket: TcpStream) -> Self {
+        Self(Mutex::new(socket))
+    }
+
+    /// Write one complete AMS frame contiguously onto the stream.
+    fn send_frame(&self, frame: &[u8]) -> std::io::Result<()> {
+        self.0.lock().expect("panicked during socket write").write_all(frame)
+    }
+
+    /// Best-effort final write and shutdown of both directions, tolerant of a
+    /// poisoned lock (used on Drop).
+    fn close(&self, final_frame: Option<&[u8]>) {
+        if let Ok(mut socket) = self.0.lock() {
+            if let Some(frame) = final_frame {
+                let _ = socket.write_all(frame);
+            }
+            let _ = socket.shutdown(Shutdown::Both);
+        }
+    }
+}
+
 /// Represents a connection to a ADS server.
 ///
-/// The Client's communication methods use `&self`, so that it can be freely
-/// shared within one thread, or sent, between threads.  Wrappers such as
-/// `Device` or `symbol::Handle` use a `&Client` as well.
+/// The Client is fully thread-safe (`Send + Sync`): its communication methods
+/// take `&self` and may be called concurrently from multiple threads.
+/// Requests are matched to replies by invoke ID via the reader thread, so
+/// concurrent requests pipeline on the single TCP connection.  Wrappers such
+/// as `Device` or `symbol::Handle` use a `&Client` as well.
 #[derive(Debug)]
 pub struct Client {
-    /// TCP connection (duplicated with the reader)
-    socket: Mutex<TcpStream>,
+    /// Write half of the TCP connection (the reader thread owns a clone of
+    /// the read half); see [`FrameSink`] for why all writes go through it.
+    socket: FrameSink,
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
     invoke_id: AtomicU32,
@@ -154,16 +192,13 @@ impl Drop for Client {
             let _ = self.device(addr).delete_notification(handle);
         }
 
-        if let Ok(ref mut socket) = self.socket.lock() {
-            // Remove our port from the router, if necessary.
-            if self.source_port_opened {
-                let mut close_port_msg = [1, 0, 2, 0, 0, 0, 0, 0];
-                LE::write_u16(&mut close_port_msg[6..], self.source.port());
-                let _ = socket.write_all(&close_port_msg);
-            }
-
-            let _ = socket.shutdown(Shutdown::Both);
-        }
+        // Remove our port from the router, if necessary, then shut down.
+        let close_port_msg = self.source_port_opened.then(|| {
+            let mut msg = [1, 0, 2, 0, 0, 0, 0, 0];
+            LE::write_u16(&mut msg[6..], self.source.port());
+            msg
+        });
+        self.socket.close(close_port_msg.as_ref().map(|msg| &msg[..]));
 
         self.receiver.stop();
     }
@@ -270,7 +305,7 @@ impl Client {
             receiver,
             source_port_opened,
             pending,
-            socket: Mutex::new(socket),
+            socket: FrameSink::new(socket),
             notif_recv: notif_rx,
             invoke_id: AtomicU32::new(1),
             read_timeout: timeouts.read,
@@ -355,9 +390,7 @@ impl Client {
         self.insert_pending_request(dispatched_invoke_id, resp_tx);
 
         self.socket
-            .lock()
-            .expect("panicked during socket write")
-            .write_all(&request_buf)
+            .send_frame(&request_buf)
             .ctx("dispatching assembled command payload")?;
 
         let (resp_header, resp_buf) = match self.read_timeout {

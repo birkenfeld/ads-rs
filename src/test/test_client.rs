@@ -15,6 +15,12 @@ fn run_test(opts: ServerOpts, f: impl Fn(Device)) {
 }
 
 #[test]
+fn test_client_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Client>();
+}
+
+#[test]
 fn test_garbage_packet() {
     run_test(ServerOpts { garbage_header: true, ..Default::default() }, |device| {
         let _ = device.get_info().unwrap_err();
